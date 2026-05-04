@@ -76,6 +76,19 @@ def detect_mime(pil_img: Image.Image) -> str:
     return _MIME_MAP.get((pil_img.format or "").upper(), "image/jpeg")
 
 
+def _to_jpeg(pil_img: Image.Image, quality: int = 92) -> bytes:
+    """Convert a PIL image to JPEG bytes, flattening any alpha channel onto white."""
+    if pil_img.mode in ("RGBA", "LA", "PA"):
+        bg = Image.new("RGB", pil_img.size, (255, 255, 255))
+        bg.paste(pil_img, mask=pil_img.split()[-1])
+        pil_img = bg
+    elif pil_img.mode != "RGB":
+        pil_img = pil_img.convert("RGB")
+    buf = BytesIO()
+    pil_img.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
 async def read_and_validate(upload: UploadFile) -> tuple[bytes, Image.Image]:
     """
     Read an UploadFile, enforce size / extension limits, and open with PIL.
@@ -157,6 +170,19 @@ async def http_error_handler(request, exc: HTTPException) -> HTMLResponse:  # ty
     )
 
 
+# ── Thumbnail helper endpoint ─────────────────────────────────────────────────
+
+@app.post("/mockup/thumbnail")
+async def make_thumbnail(file: UploadFile = File(...)) -> Response:
+    """Accept any supported image, return a small JPEG thumbnail."""
+    data, pil = await read_and_validate(file)
+    pil = Image.open(BytesIO(_to_jpeg(pil)))
+    pil.thumbnail((600, 300), Image.LANCZOS)
+    buf = BytesIO()
+    pil.save(buf, format="JPEG", quality=82)
+    return Response(content=buf.getvalue(), media_type="image/jpeg")
+
+
 # ── Step 1 — Upload Form ──────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -204,7 +230,7 @@ async def home() -> HTMLResponse:
     font-family: 'DM Serif Display', serif; font-size: 1.4rem;
     margin-bottom: 16px;
   }
-  .steps { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .steps { display: grid; grid-template-columns: 1fr; gap: 12px; }
   .step-card {
     background: #fff; border: 1px solid var(--border); border-radius: 12px;
     padding: 16px 16px;
@@ -232,6 +258,18 @@ async def home() -> HTMLResponse:
     .col-info { padding: 36px 24px 24px; }
     .col-form { border-left: none; border-top: 1px solid var(--border); padding: 28px 24px 40px; justify-content: flex-start; }
     .steps { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+    .logo { font-size: 2.8rem; }
+    .tagline { font-size: 1.2rem; }
+    .step-card h3 { font-size: 1.15rem; }
+    .step-card p { font-size: 1.05rem; line-height: 1.6; }
+    .upload-card h2 { font-size: 1.9rem; }
+    .upload-card .card-sub { font-size: 1.05rem; }
+    label.field-label { font-size: 1rem; }
+    input[type="file"] { font-size: 1.1rem; padding: 13px 14px; }
+    input[type="number"] { font-size: 1.1rem; padding: 13px 14px; }
+    .orient-card .lbl { font-size: 1.08rem; }
+    .orient-card .sublbl { font-size: 0.98rem; }
+    button[type="submit"] { font-size: 1.2rem; padding: 16px; }
   }
 
   input[type="file"] {
@@ -249,7 +287,7 @@ async def home() -> HTMLResponse:
   input:focus { border-color: var(--accent); }
 
   .preview-thumb {
-    max-width: 100%; max-height: 110px; border-radius: 8px; margin-top: 10px;
+    max-width: 100%; max-height: 110px; border-radius: 0; margin-top: 10px;
     object-fit: cover; border: 1px solid var(--border); display: block;
   }
 
@@ -291,24 +329,24 @@ async def home() -> HTMLResponse:
     <h2>How it works</h2>
     <div class="steps">
       <div class="step-card">
-        <div class="step-num">1</div>
+        <div class="step-num" id="stepOneBadge">1</div>
         <h3>Upload your photos</h3>
-        <p>Choose a room/wall photo and your artwork or print file. Enter a real-world measurement of the wall space.</p>
+        <p>Upload a photo of your room or wall, then upload your artwork or print file. Choose the print orientation — horizontal for wide prints, vertical for tall ones. Enter the real-world width or height of the wall you measured in inches.</p>
       </div>
       <div class="step-card">
         <div class="step-num">2</div>
         <h3>Mark the measurement</h3>
-        <p>Click two points on the photo that match your measurement — either wall edges or ceiling &amp; floor.</p>
+        <p>On the next screen, click two points on the room photo that correspond to your wall measurement — for example, the left and right edges of the wall, or the floor directly below to the ceiling directly above a single spot.</p>
       </div>
       <div class="step-card">
         <div class="step-num">3</div>
         <h3>Set print size</h3>
-        <p>Type the longest edge in inches. The mockup is generated to exact scale based on your measurement.</p>
+        <p>Enter the longest edge of your print in inches. The tool uses your marked measurement to calculate the exact scale and places the artwork on the wall at true size.</p>
       </div>
       <div class="step-card">
         <div class="step-num">4</div>
         <h3>Position &amp; download</h3>
-        <p>Drag the print onto the wall. Set the light direction for a realistic shadow, then download.</p>
+        <p>Drag the print to your desired position on the wall. Adjust the shadow direction to match your room's lighting. When you're happy with the placement, click Download to save your mockup.</p>
       </div>
     </div>
   </div>
@@ -333,7 +371,7 @@ async def home() -> HTMLResponse:
            onchange="previewFile(this,'artPrev')">
     <div id="artPrev"></div>
 
-    <label class="field-label" for="wallMeasInput">Measured Distance (inches)</label>
+    <label class="field-label" for="wallMeasInput">Wall Width/Height Measurement (inches)</label>
     <input type="number" name="wall_measurement" id="wallMeasInput"
            step="0.1" min="1" max="9999" inputmode="decimal"
            placeholder="e.g. 96" required>
@@ -368,11 +406,34 @@ function previewFile(input, containerId) {
   if (!file) return;
   const reader = new FileReader();
   reader.onload = e => {
-    const img = document.createElement('img');
-    img.src = e.target.result;
-    img.className = 'preview-thumb';
-    img.alt = 'Preview';
-    container.appendChild(img);
+    const tempImg = new Image();
+    tempImg.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = tempImg.naturalWidth;
+      canvas.height = tempImg.naturalHeight;
+      canvas.getContext('2d').drawImage(tempImg, 0, 0);
+      const img = document.createElement('img');
+      img.src = canvas.toDataURL('image/jpeg', 0.85);
+      img.className = 'preview-thumb';
+      img.alt = 'Preview';
+      container.appendChild(img);
+    };
+    tempImg.onerror = () => {
+      // Browser can't decode this format (e.g. TIFF, HEIC) — ask the server
+      const fd = new FormData();
+      fd.append('file', file);
+      fetch('/mockup/thumbnail', { method: 'POST', body: fd })
+        .then(r => r.ok ? r.blob() : Promise.reject())
+        .then(blob => {
+          const img = document.createElement('img');
+          img.src = URL.createObjectURL(blob);
+          img.className = 'preview-thumb';
+          img.alt = 'Preview';
+          container.appendChild(img);
+        })
+        .catch(() => {});
+    };
+    tempImg.src = e.target.result;
   };
   reader.readAsDataURL(file);
 }
@@ -381,6 +442,30 @@ document.getElementById('mainForm').addEventListener('submit', () => {
   const btn = document.getElementById('submitBtn');
   btn.textContent = 'Uploading…';
   btn.disabled = true;
+});
+
+function checkStep1Complete() {
+  const roomOk = document.getElementById('roomFile').files.length > 0;
+  const artOk = document.getElementById('artFile').files.length > 0;
+  const measOk = document.getElementById('wallMeasInput').value.trim() !== '';
+  const badge = document.getElementById('stepOneBadge');
+  if (roomOk && artOk && measOk) {
+    badge.textContent = '✓';
+    badge.style.background = '#16a34a';
+  } else {
+    badge.textContent = '1';
+    badge.style.background = '';
+  }
+}
+document.getElementById('roomFile').addEventListener('change', checkStep1Complete);
+document.getElementById('artFile').addEventListener('change', checkStep1Complete);
+document.getElementById('wallMeasInput').addEventListener('input', checkStep1Complete);
+
+['roomFile', 'artFile', 'wallMeasInput'].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener('invalid', () => el.setCustomValidity('Please fill in this field.'));
+  el.addEventListener('input', () => el.setCustomValidity(''));
+  el.addEventListener('change', () => el.setCustomValidity(''));
 });
 </script>
 </body>
@@ -513,7 +598,14 @@ def _build_picker_html(
     body {{ height: auto; overflow-y: auto; overflow-x: hidden; padding-bottom: 20px; }}
     .canvas-wrap {{ flex: none; min-height: 72vw; }}
     .instr-bar {{ gap: 12px; }}
-    .tips {{ font-size: 0.82rem; }}
+    .page-title {{ font-size: 2rem; }}
+    .page-sub {{ font-size: 1.1rem; }}
+    .instr-text {{ font-size: 1.05rem; }}
+    .tips {{ font-size: 1rem; line-height: 1.65; }}
+    .meta-chip {{ font-size: 0.98rem; }}
+    .btn {{ font-size: 1.15rem; padding: 14px 24px; }}
+    .ready-msg {{ font-size: 1.05rem; }}
+    .back-row a {{ font-size: 1.1rem; padding: 14px 24px; }}
   }}
   .btn {{
     padding: 12px 24px; border-radius: 9px; border: none;
@@ -524,6 +616,20 @@ def _build_picker_html(
   .btn:disabled {{ opacity: 0.32; cursor: not-allowed; transform: none; }}
   .btn-primary {{ background: var(--accent); color: #fff; }}
   .btn-ghost   {{ background: #fff; color: var(--ink); border: 1px solid var(--border); }}
+  .ready-msg {{
+    flex: 1; background: #f0fff4; border: 1px solid #86efac; border-radius: 9px;
+    padding: 10px 16px; font-size: 0.92rem; color: #166534;
+    text-align: center; display: none; align-items: center; justify-content: center;
+  }}
+  .back-row {{ max-width: 960px; width: 100%; padding-bottom: 16px; }}
+  .back-row a {{
+    display: inline-block; padding: 11px 22px; border-radius: 9px;
+    border: 1px solid var(--border); background: #fff; color: var(--ink);
+    text-decoration: none; font-family: 'DM Sans', sans-serif;
+    font-size: 0.95rem; font-weight: 500;
+    transition: opacity .2s, transform .15s;
+  }}
+  .back-row a:hover {{ opacity: 0.82; transform: translateY(-1px); }}
 </style>
 </head>
 <body>
@@ -551,12 +657,13 @@ def _build_picker_html(
 </div>
 
 <div class="tips">
-  <strong>Tips for accuracy:</strong>
+  <strong>How to mark your measurement:</strong>
   <ul>
-    <li>Zoom in on the photo before clicking if you need more precision.</li>
-    <li>Pick points at the same depth in the photo (both on the wall surface, not corners that recede).</li>
     <li>{tip_extra}</li>
-    <li>If your click was off, press <strong>Reset</strong> and try again.</li>
+    <li>Click precisely on the two points that define the distance you entered on the previous step.</li>
+    <li>Pick points at the same depth in the photo — both should lie flat on the wall surface, not on corners that angle away.</li>
+    <li>For best accuracy, zoom in on the photo before clicking. Use the Reset button if a click was off.</li>
+    <li>The further apart your two points are in the photo, the more accurate the final scale will be.</li>
   </ul>
 </div>
 
@@ -567,9 +674,13 @@ def _build_picker_html(
 
 <div class="controls">
   <button class="btn btn-ghost" onclick="reset()">↺ Reset</button>
+  <div class="ready-msg" id="readyMsg">Both points set — click <strong> Next </strong> to see your mockup</div>
   <button class="btn btn-primary" id="nextBtn" disabled onclick="proceed()">
-    Next: Position Print →
+    Next
   </button>
+</div>
+<div class="back-row">
+  <a href="/">← Back to Start</a>
 </div>
 
 <form id="rf" action="/mockup/editor" method="post" style="display:none">
@@ -697,6 +808,7 @@ canvas.addEventListener('click', e => {{
     chip.textContent = ppi + ' px/in · ready ✓';
     chip.style.display = 'block';
     document.getElementById('nextBtn').disabled = false;
+    document.getElementById('readyMsg').style.display = 'flex';
   }}
   draw();
 }});
@@ -714,6 +826,7 @@ function reset() {{
   setStep(1,'active'); setStep(2,'waiting');
   document.getElementById('t2').classList.add('muted');
   document.getElementById('ppiChip').style.display = 'none';
+  document.getElementById('readyMsg').style.display = 'none';
   document.getElementById('nextBtn').disabled = true;
   draw();
 }}
@@ -750,14 +863,13 @@ async def mockup_picker_post(
         orientation = "H"
 
     room_bytes, room_pil = await read_and_validate(room_file)
-    art_bytes,  _        = await read_and_validate(art_file)
+    art_bytes,  art_pil  = await read_and_validate(art_file)
 
-    room_mime = detect_mime(room_pil)
-    room_id   = _save_image(room_bytes, room_mime)
+    room_bytes = _to_jpeg(room_pil)
+    art_bytes  = _to_jpeg(art_pil)
 
-    art_pil   = Image.open(BytesIO(art_bytes))
-    art_mime  = detect_mime(art_pil)
-    art_id    = _save_image(art_bytes, art_mime)
+    room_id = _save_image(room_bytes, "image/jpeg")
+    art_id  = _save_image(art_bytes,  "image/jpeg")
 
     return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation))
 
@@ -913,6 +1025,18 @@ async def mockup_editor(
     }}
     .hint {{ margin-top: 20px; }}
     .piece-list {{ max-height: none; }}
+    .panel-title {{ font-size: 1.8rem; }}
+    .panel-sub {{ font-size: 1.08rem; }}
+    .field-label {{ font-size: 1rem; }}
+    .size-input {{ font-size: 1.25rem; width: 110px; }}
+    .size-unit {{ font-size: 1.15rem; }}
+    .size-other {{ font-size: 1rem; }}
+    .tip {{ font-size: 1rem; line-height: 1.65; }}
+    .toggle-label {{ font-size: 1.08rem; }}
+    .btn {{ font-size: 1.1rem; padding: 14px; }}
+    .piece-name {{ font-size: 1.02rem; }}
+    .piece-size {{ font-size: 0.92rem; }}
+    .btn-add {{ font-size: 1rem; padding: 11px; }}
   }}
 
   /* ── Panel typography ── */
@@ -929,12 +1053,13 @@ async def mockup_editor(
   /* ── Size input ── */
   .size-row {{ display: flex; align-items: center; gap: 10px; }}
   .size-input {{
-    width: 90px; padding: 10px 12px; border: 1px solid var(--border);
+    width: 90px; padding: 10px 12px; border: 2px solid var(--accent);
     border-radius: 8px; font-family: 'DM Sans', sans-serif;
     font-size: 1.05rem; font-weight: 500; color: var(--ink);
-    background: var(--paper); outline: none; transition: border-color .2s;
+    background: #fff3ee; outline: none; transition: border-color .2s, box-shadow .2s;
+    box-shadow: 0 0 0 3px rgba(200,68,10,0.12);
   }}
-  .size-input:focus {{ border-color: var(--accent); }}
+  .size-input:focus {{ border-color: var(--accent); box-shadow: 0 0 0 4px rgba(200,68,10,0.22); }}
   .size-unit {{ font-size: 0.95rem; }}
   .size-other {{ font-size: 0.82rem; color: var(--muted); font-style: italic; }}
   .tip {{
@@ -1091,7 +1216,7 @@ async def mockup_editor(
 
   <span class="field-label">Perspective Adjust</span>
   <div class="toggle-row">
-    <span class="toggle-label">Warp corners to wall angle</span>
+    <span class="toggle-label">Skew picture corners to match wall angle</span>
     <div class="toggle" id="perspToggle" onclick="togglePersp()"></div>
   </div>
   <div class="persp-info" id="perspInfo">
@@ -1200,6 +1325,9 @@ function tryStart() {{
     }}
     initLayout();
     startLoop();
+    const inp = document.getElementById('sizeInInput');
+    inp.value = '24';
+    onSizeInput('24');
   }})();
 }}
 
