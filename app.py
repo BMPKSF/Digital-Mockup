@@ -10,7 +10,7 @@ from io import BytesIO
 
 from fastapi import FastAPI, Form, HTTPException, Query, UploadFile, File
 from fastapi.responses import HTMLResponse, Response
-from PIL import Image
+from PIL import Image, ImageOps
 
 # ── Optional HEIF/HEIC support ────────────────────────────────────────────────
 try:
@@ -76,14 +76,24 @@ def detect_mime(pil_img: Image.Image) -> str:
     return _MIME_MAP.get((pil_img.format or "").upper(), "image/jpeg")
 
 
-def _to_jpeg(pil_img: Image.Image, quality: int = 92) -> bytes:
-    """Convert a PIL image to JPEG bytes, flattening any alpha channel onto white."""
+_MAX_DIM = 2400  # cap longest edge to keep base64 payloads small
+
+def _to_jpeg(pil_img: Image.Image, quality: int = 85) -> bytes:
+    """Convert a PIL image to JPEG bytes, flattening any alpha channel onto white.
+    Resizes so the longest edge is at most _MAX_DIM pixels."""
+    pil_img = ImageOps.exif_transpose(pil_img)
     if pil_img.mode in ("RGBA", "LA", "PA"):
         bg = Image.new("RGB", pil_img.size, (255, 255, 255))
         bg.paste(pil_img, mask=pil_img.split()[-1])
         pil_img = bg
     elif pil_img.mode != "RGB":
         pil_img = pil_img.convert("RGB")
+    w, h = pil_img.size
+    if max(w, h) > _MAX_DIM:
+        if w >= h:
+            pil_img = pil_img.resize((_MAX_DIM, round(h * _MAX_DIM / w)), Image.LANCZOS)
+        else:
+            pil_img = pil_img.resize((round(w * _MAX_DIM / h), _MAX_DIM), Image.LANCZOS)
     buf = BytesIO()
     pil_img.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
