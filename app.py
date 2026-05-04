@@ -325,6 +325,13 @@ async def home() -> HTMLResponse:
   }
   button[type="submit"]:hover:not(:disabled) { opacity: 0.88; transform: translateY(-1px); }
   button[type="submit"]:disabled { opacity: 0.55; cursor: not-allowed; }
+  .btn-spinner {
+    display: inline-block; width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff;
+    border-radius: 50%; animation: btnSpin .7s linear infinite;
+    vertical-align: middle; margin-right: 8px;
+  }
+  @keyframes btnSpin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -448,7 +455,7 @@ function previewFile(input, containerId) {
 
 document.getElementById('mainForm').addEventListener('submit', () => {
   const btn = document.getElementById('submitBtn');
-  btn.textContent = 'Uploading…';
+  btn.innerHTML = '<span class="btn-spinner"></span>Uploading…';
   btn.disabled = true;
 });
 
@@ -1068,6 +1075,15 @@ async def mockup_editor(
     box-shadow: 0 0 0 3px rgba(200,68,10,0.12);
   }}
   .size-input:focus {{ border-color: var(--accent); box-shadow: 0 0 0 4px rgba(200,68,10,0.22); }}
+  .preset-row {{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }}
+  .preset-btn {{
+    padding: 6px 11px; border-radius: 7px; border: 1.5px solid var(--border);
+    background: var(--paper); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-size: 0.88rem; font-weight: 500; color: var(--ink);
+    cursor: pointer; transition: border-color .15s, background .15s, color .15s;
+  }}
+  .preset-btn:hover {{ border-color: var(--accent); color: var(--accent); background: #fff3ee; }}
+  .preset-btn.active {{ border-color: var(--accent); background: var(--accent); color: #fff; }}
   .size-unit {{ font-size: 0.95rem; }}
   .size-other {{ font-size: 0.82rem; color: var(--muted); font-style: italic; }}
   .tip {{
@@ -1208,6 +1224,14 @@ async def mockup_editor(
     <span class="size-other" id="sizeOther"></span>
   </div>
 
+  <div class="preset-row" id="presetRow">
+    <button class="preset-btn" onclick="applyPreset(24, this)">24"</button>
+    <button class="preset-btn" onclick="applyPreset(36, this)">36"</button>
+    <button class="preset-btn" onclick="applyPreset(48, this)">48"</button>
+    <button class="preset-btn" onclick="applyPreset(60, this)">60"</button>
+    <button class="preset-btn" onclick="applyPreset(72, this)">72"</button>
+  </div>
+
   <div class="tip" id="sizeTip">
     {size_tip_body}
     &nbsp;·&nbsp; <strong>Space:</strong> {wall_measurement}" &nbsp;·&nbsp;
@@ -1336,6 +1360,9 @@ function tryStart() {{
     const inp = document.getElementById('sizeInInput');
     inp.value = '24';
     onSizeInput('24');
+    document.querySelectorAll('.preset-btn').forEach(b => {{
+      b.classList.toggle('active', b.textContent === '24"');
+    }});
   }})();
 }}
 
@@ -1441,6 +1468,16 @@ function onSizeInput(val) {{
   p.lastSizeIn = v;
   _applySizeIn(p, v);
   renderPieceList();
+  // Sync preset button active state
+  document.querySelectorAll('.preset-btn').forEach(b => {{
+    b.classList.toggle('active', parseFloat(b.textContent) === v);
+  }});
+}}
+
+function applyPreset(size, btn) {{
+  const inp = document.getElementById('sizeInInput');
+  inp.value = size;
+  onSizeInput(String(size));
 }}
 
 function _applySizeIn(p, sizeIn) {{
