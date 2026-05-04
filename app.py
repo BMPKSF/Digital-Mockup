@@ -683,7 +683,7 @@ def _build_picker_html(
 
 <div class="controls">
   <button class="btn btn-ghost" onclick="reset()">↺ Reset</button>
-  <div class="ready-msg" id="readyMsg">Both points set — click <strong> Next </strong> to see your mockup</div>
+  <div class="ready-msg" id="readyMsg">Both points set — click&nbsp;<strong>Next</strong>&nbsp;to see your mockup</div>
   <button class="btn btn-primary" id="nextBtn" disabled onclick="proceed()">
     Next
   </button>
