@@ -76,9 +76,9 @@ def detect_mime(pil_img: Image.Image) -> str:
     return _MIME_MAP.get((pil_img.format or "").upper(), "image/jpeg")
 
 
-_MAX_DIM = 2400  # cap longest edge to keep base64 payloads small
+_MAX_DIM = 1800  # cap longest edge to keep base64 payloads small
 
-def _to_jpeg(pil_img: Image.Image, quality: int = 85) -> bytes:
+def _to_jpeg(pil_img: Image.Image, quality: int = 80) -> bytes:
     """Convert a PIL image to JPEG bytes, flattening any alpha channel onto white.
     Resizes so the longest edge is at most _MAX_DIM pixels."""
     pil_img = ImageOps.exif_transpose(pil_img)
@@ -150,7 +150,6 @@ async def http_error_handler(request, exc: HTTPException) -> HTMLResponse:  # ty
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#f5f2ec">
 <title>Error — Wall Mockup</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
   *{{box-sizing:border-box;margin:0;padding:0}}
   body{{font-family:'DM Sans',sans-serif;font-weight:300;background:#f5f2ec;
@@ -204,7 +203,6 @@ async def home() -> HTMLResponse:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#f5f2ec">
 <title>Wall Mockup Tool</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -213,7 +211,7 @@ async def home() -> HTMLResponse:
   }
   body {
     background: var(--paper); color: var(--ink);
-    font-family: 'DM Sans', sans-serif; font-weight: 300;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-weight: 300;
     height: 100vh; overflow: hidden;
     display: grid; grid-template-columns: 1fr 400px;
   }
@@ -229,7 +227,7 @@ async def home() -> HTMLResponse:
     overflow-y: auto;
   }
   .logo {
-    font-family: 'DM Serif Display', serif;
+    font-family: Georgia, serif;
     font-size: clamp(2rem, 4vw, 3rem);
     letter-spacing: -0.02em; margin-bottom: 6px;
   }
@@ -237,7 +235,7 @@ async def home() -> HTMLResponse:
 
   .how-section { width: 100%; margin-bottom: 0; }
   .how-section h2 {
-    font-family: 'DM Serif Display', serif; font-size: 1.4rem;
+    font-family: Georgia, serif; font-size: 1.4rem;
     margin-bottom: 16px;
   }
   .steps { display: grid; grid-template-columns: 1fr; gap: 12px; }
@@ -254,7 +252,7 @@ async def home() -> HTMLResponse:
   .step-card p  { font-size: 0.85rem; line-height: 1.5; }
 
   .upload-card { width: 100%; }
-  .upload-card h2 { font-family: 'DM Serif Display', serif; font-size: 1.55rem; margin-bottom: 4px; }
+  .upload-card h2 { font-family: Georgia, serif; font-size: 1.55rem; margin-bottom: 4px; }
   .upload-card .card-sub {
     font-size: 0.92rem; font-style: italic; margin-bottom: 20px;
   }
@@ -321,7 +319,7 @@ async def home() -> HTMLResponse:
   button[type="submit"] {
     margin-top: 28px; width: 100%; padding: 14px;
     background: var(--accent); color: #fff; border: none;
-    border-radius: 9px; font-family: 'DM Sans', sans-serif;
+    border-radius: 9px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     font-size: 1.05rem; font-weight: 500; cursor: pointer;
     transition: opacity .2s, transform .15s;
   }
@@ -499,6 +497,8 @@ def _build_picker_html(
     except Exception:
         raise HTTPException(400, "Room image could not be opened from storage.")
 
+    room_b64 = base64.b64encode(room_data).decode("utf-8")
+
     is_vertical = (orientation == "V")
 
     if is_vertical:
@@ -523,7 +523,6 @@ def _build_picker_html(
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#f5f2ec">
 <title>Mark Measurement Points</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
   :root {{
@@ -532,13 +531,13 @@ def _build_picker_html(
     --p1: {point1_color}; --p2: {point2_color};
   }}
   body {{
-    font-family: 'DM Sans', sans-serif; font-weight: 300;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-weight: 300;
     background: var(--paper); color: var(--ink);
     height: 100vh; overflow: hidden; padding: 16px 20px 0;
     display: flex; flex-direction: column; align-items: center;
   }}
   .page-title {{
-    font-family: 'DM Serif Display', serif; font-size: 1.75rem;
+    font-family: Georgia, serif; font-size: 1.75rem;
     margin-bottom: 2px; text-align: center;
   }}
   .page-sub {{
@@ -619,7 +618,7 @@ def _build_picker_html(
   }}
   .btn {{
     padding: 12px 24px; border-radius: 9px; border: none;
-    font-family: 'DM Sans', sans-serif; font-size: 1rem; font-weight: 500;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 1rem; font-weight: 500;
     cursor: pointer; transition: opacity .2s, transform .15s;
   }}
   .btn:hover {{ opacity: 0.86; transform: translateY(-1px); }}
@@ -635,7 +634,7 @@ def _build_picker_html(
   .back-row a {{
     display: inline-block; padding: 11px 22px; border-radius: 9px;
     border: 1px solid var(--border); background: #fff; color: var(--ink);
-    text-decoration: none; font-family: 'DM Sans', sans-serif;
+    text-decoration: none; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     font-size: 0.95rem; font-weight: 500;
     transition: opacity .2s, transform .15s;
   }}
@@ -705,7 +704,7 @@ def _build_picker_html(
 </form>
 
 <script>
-const ROOM_ID    = "{room_id}";
+const ROOM_B64   = "{room_b64}";
 const IS_VERT    = {'true' if is_vertical else 'false'};
 const WALL_MEAS  = {wall_measurement};
 const P1_COLOR   = "{point1_color}";
@@ -728,7 +727,7 @@ img.onerror = () => {{
   document.getElementById('canvasLoader').innerHTML =
     '<p style="color:#c8440a;font-size:0.85rem;padding:20px">Could not load room image.</p>';
 }};
-img.src = '/mockup/img/' + ROOM_ID;
+img.src = 'data:image/jpeg;base64,' + ROOM_B64;
 
 // ── Draw ─────────────────────────────────────────────────────────────────
 function draw() {{
@@ -991,7 +990,6 @@ async def mockup_editor(
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <meta name="theme-color" content="#1a1a18">
 <title>Position Your Print</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
   :root {{
@@ -1001,7 +999,7 @@ async def mockup_editor(
 
   /* ── Desktop: side-by-side full-viewport ── */
   body {{
-    font-family: 'DM Sans', sans-serif; font-weight: 300;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-weight: 300;
     background: var(--paper); color: var(--ink);
     height: 100vh; overflow: hidden;
     display: grid; grid-template-columns: 1fr 320px;
@@ -1051,7 +1049,7 @@ async def mockup_editor(
 
   /* ── Panel typography ── */
   .panel-title {{
-    font-family: 'DM Serif Display', serif; font-size: 1.45rem;
+    font-family: Georgia, serif; font-size: 1.45rem;
     margin-bottom: 3px; line-height: 1.2;
   }}
   .panel-sub {{ font-size: 0.9rem; font-style: italic; margin-bottom: 12px; }}
@@ -1064,7 +1062,7 @@ async def mockup_editor(
   .size-row {{ display: flex; align-items: center; gap: 10px; }}
   .size-input {{
     width: 90px; padding: 10px 12px; border: 2px solid var(--accent);
-    border-radius: 8px; font-family: 'DM Sans', sans-serif;
+    border-radius: 8px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     font-size: 1.05rem; font-weight: 500; color: var(--ink);
     background: #fff3ee; outline: none; transition: border-color .2s, box-shadow .2s;
     box-shadow: 0 0 0 3px rgba(200,68,10,0.12);
@@ -1113,7 +1111,7 @@ async def mockup_editor(
   /* ── Buttons ── */
   .btn {{
     width: 100%; padding: 11px; border-radius: 9px; border: none;
-    font-family: 'DM Sans', sans-serif; font-size: 0.94rem; font-weight: 500;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 0.94rem; font-weight: 500;
     cursor: pointer; transition: opacity .2s, transform .15s; margin-top: 6px;
   }}
   .btn:hover {{ opacity: 0.88; transform: translateY(-1px); }}
@@ -1149,7 +1147,7 @@ async def mockup_editor(
   .btn-add {{
     width: 100%; padding: 8px; margin-top: 6px; border-radius: 8px;
     border: 1.5px dashed var(--border); background: transparent;
-    font-family: 'DM Sans', sans-serif; font-size: 0.88rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 0.88rem;
     cursor: pointer; transition: border-color .15s, color .15s;
   }}
   .btn-add:hover {{ border-color: var(--accent); color: var(--accent); }}
