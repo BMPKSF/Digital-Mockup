@@ -5,6 +5,7 @@ import html as html_mod
 import os
 import time
 import urllib.parse
+import urllib.request
 import uuid
 from io import BytesIO
 
@@ -509,6 +510,266 @@ document.getElementById('wallMeasInput').addEventListener('input', checkStep1Com
 </html>""")
 
 
+# ── Step 1b — Prefill flow (artwork supplied via URL) ─────────────────────────
+
+def _build_prefill_html(art_id: str, art_thumb_b64: str) -> str:
+    """Return Step-1 HTML with artwork pre-loaded; client only supplies room + measurement."""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#f5f2ec">
+<title>WallyMock</title>
+<style>
+  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  :root {{
+    --ink: #000; --paper: #f5f2ec; --accent: #c8440a;
+    --muted: #000; --border: #d8d4cc;
+  }}
+  body {{
+    background: var(--paper); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-weight: 300;
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    padding: 40px 20px;
+  }}
+  .card {{
+    background: #fff; border: 1px solid var(--border); border-radius: 18px;
+    padding: 40px 40px; max-width: 480px; width: 100%;
+  }}
+  .logo {{ font-family: Georgia, serif; font-size: 1.6rem; letter-spacing: -0.02em; margin-bottom: 4px; }}
+  .card-sub {{ font-size: 1rem; font-style: italic; margin-bottom: 28px; }}
+  .art-preview-box {{
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--paper); padding: 12px; margin-bottom: 20px;
+    display: flex; align-items: center; gap: 14px;
+  }}
+  .art-preview-box img {{
+    max-width: 90px; max-height: 90px; border-radius: 6px;
+    object-fit: contain; flex-shrink: 0;
+  }}
+  .art-preview-text {{ font-size: 0.9rem; line-height: 1.5; }}
+  .art-preview-text strong {{ display: block; margin-bottom: 2px; }}
+  .art-check {{ color: #16a34a; font-size: 1.1rem; }}
+  label.field-label {{
+    display: block; font-size: 0.9rem; text-transform: uppercase;
+    letter-spacing: 0.09em; margin-bottom: 6px; margin-top: 20px;
+  }}
+  label.field-label:first-of-type {{ margin-top: 0; }}
+  input[type="file"] {{
+    width: 100%; padding: 10px 14px; border: 1px solid var(--border);
+    border-radius: 9px; font-family: inherit; font-size: 1rem;
+    background: var(--paper); color: var(--ink); outline: none;
+    transition: border-color .2s; cursor: pointer;
+  }}
+  input[type="number"] {{
+    width: 100%; padding: 10px 14px; border: 1px solid var(--border);
+    border-radius: 9px; font-family: inherit; font-size: 1rem;
+    background: var(--paper); color: var(--ink); outline: none;
+    transition: border-color .2s;
+  }}
+  input:focus {{ border-color: var(--accent); }}
+  input.field-error {{ border-color: #c8440a; background: #fff5f2; animation: errorShake .3s; }}
+  @keyframes errorShake {{
+    0%,100%{{transform:translateX(0)}} 25%{{transform:translateX(-6px)}} 75%{{transform:translateX(6px)}}
+  }}
+  .preview-thumb {{
+    max-width: 100%; max-height: 110px; border-radius: 0; margin-top: 10px;
+    object-fit: cover; border: 1px solid var(--border); display: block;
+  }}
+  .orient-row {{ display: flex; gap: 12px; margin-top: 6px; }}
+  .orient-row input[type="radio"] {{
+    position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none;
+  }}
+  .orient-card {{
+    flex: 1; border: 2px solid var(--border); border-radius: 10px;
+    padding: 13px 10px; text-align: center; cursor: pointer;
+    transition: border-color .2s, background .2s; background: var(--paper);
+    user-select: none; display: block;
+  }}
+  .orient-row input[type="radio"]:checked + .orient-card {{
+    border-color: var(--accent); background: #fff3ee;
+  }}
+  .orient-card .icon  {{ font-size: 1.6rem; display: block; margin-bottom: 5px; line-height: 1; }}
+  .orient-card .lbl   {{ font-size: 1rem; font-weight: 500; }}
+  .orient-card .sublbl {{ font-size: 0.9rem; margin-top: 2px; }}
+  button[type="submit"] {{
+    margin-top: 28px; width: 100%; padding: 14px;
+    background: var(--accent); color: #fff; border: none;
+    border-radius: 9px; font-family: inherit;
+    font-size: 1.05rem; font-weight: 500; cursor: pointer;
+    transition: opacity .2s, transform .15s;
+  }}
+  button[type="submit"]:hover:not(:disabled) {{ opacity: 0.88; transform: translateY(-1px); }}
+  button[type="submit"]:disabled {{ opacity: 0.55; cursor: not-allowed; }}
+  .btn-spinner {{
+    display: inline-block; width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff;
+    border-radius: 50%; animation: btnSpin .7s linear infinite;
+    vertical-align: middle; margin-right: 8px;
+  }}
+  @keyframes btnSpin {{ to {{ transform: rotate(360deg); }} }}
+  @media (max-width: 600px) {{
+    .card {{ padding: 28px 20px; }}
+    input[type="file"], input[type="number"] {{ font-size: 1.1rem; padding: 13px 14px; }}
+    button[type="submit"] {{ font-size: 1.2rem; padding: 16px; }}
+    label.field-label {{ font-size: 1rem; }}
+  }}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">WallyMock</div>
+  <p class="card-sub">Step 1 of 4 — Upload &amp; configure</p>
+
+  <div class="art-preview-box">
+    <img src="data:image/jpeg;base64,{art_thumb_b64}" alt="Selected artwork">
+    <div class="art-preview-text">
+      <strong><span class="art-check">✓</span> Artwork pre-loaded</strong>
+      Your selected print is ready. Just upload a photo of your wall and enter the measurement below.
+    </div>
+  </div>
+
+  <form action="/mockup/picker_prefill" enctype="multipart/form-data" method="post" id="mainForm">
+    <input type="hidden" name="art_id" value="{art_id}">
+
+    <label class="field-label" for="roomFile">Room / Wall Photo</label>
+    <input type="file" name="room_file" id="roomFile" accept="image/*"
+           autocomplete="off"
+           onchange="previewFile(this,'roomPrev')">
+    <div id="roomPrev"></div>
+
+    <label class="field-label" for="wallMeasInput">Wall Width/Height Measurement (inches)</label>
+    <input type="number" name="wall_measurement" id="wallMeasInput"
+           step="0.1" min="1" max="9999" inputmode="decimal"
+           placeholder="e.g. 96">
+
+    <label class="field-label">Print Orientation</label>
+    <div class="orient-row">
+      <input type="radio" name="orientation" id="orH" value="H" checked>
+      <label class="orient-card" for="orH">
+        <span class="icon">⬛️</span>
+        <div class="lbl">Horizontal</div>
+        <div class="sublbl">Landscape / wide print</div>
+      </label>
+      <input type="radio" name="orientation" id="orV" value="V">
+      <label class="orient-card" for="orV">
+        <span class="icon">▮</span>
+        <div class="lbl">Vertical</div>
+        <div class="sublbl">Portrait / tall print</div>
+      </label>
+    </div>
+
+    <button type="submit" id="submitBtn">Next: Mark the Measurement →</button>
+  </form>
+</div>
+
+<script>
+function previewFile(input, containerId) {{
+  const file = input.files[0];
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {{
+    const tempImg = new Image();
+    tempImg.onload = () => {{
+      const canvas = document.createElement('canvas');
+      canvas.width = tempImg.naturalWidth;
+      canvas.height = tempImg.naturalHeight;
+      canvas.getContext('2d').drawImage(tempImg, 0, 0);
+      const img = document.createElement('img');
+      img.src = canvas.toDataURL('image/jpeg', 0.85);
+      img.className = 'preview-thumb';
+      img.alt = 'Preview';
+      container.appendChild(img);
+    }};
+    tempImg.onerror = () => {{
+      const fd = new FormData();
+      fd.append('file', file);
+      fetch('/mockup/thumbnail', {{ method: 'POST', body: fd }})
+        .then(r => r.ok ? r.blob() : Promise.reject())
+        .then(blob => {{
+          const img = document.createElement('img');
+          img.src = URL.createObjectURL(blob);
+          img.className = 'preview-thumb';
+          img.alt = 'Preview';
+          container.appendChild(img);
+        }})
+        .catch(() => {{}});
+    }};
+    tempImg.src = e.target.result;
+  }};
+  reader.readAsDataURL(file);
+}}
+
+document.getElementById('mainForm').addEventListener('submit', e => {{
+  const roomEl = document.getElementById('roomFile');
+  const measEl = document.getElementById('wallMeasInput');
+  const missing = [
+    [roomEl, roomEl.files.length === 0],
+    [measEl, measEl.value.trim() === ''],
+  ].filter(([, bad]) => bad).map(([el]) => el);
+  if (missing.length) {{
+    e.preventDefault();
+    missing.forEach(el => {{
+      el.classList.add('field-error');
+      el.addEventListener('change', () => el.classList.remove('field-error'), {{ once: true }});
+      el.addEventListener('input',  () => el.classList.remove('field-error'), {{ once: true }});
+    }});
+    missing[0].focus();
+    return;
+  }}
+  const btn = document.getElementById('submitBtn');
+  btn.innerHTML = '<span class="btn-spinner"></span>Uploading…';
+  btn.disabled = true;
+}});
+</script>
+</body>
+</html>"""
+
+
+@app.get("/mockup/prefill", response_class=HTMLResponse)
+async def mockup_prefill(art_url: str = Query(...)) -> HTMLResponse:
+    """Fetch artwork from a URL, store it, return a pre-populated Step-1 page."""
+    parsed = urllib.parse.urlparse(art_url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(400, "art_url must be an HTTP or HTTPS URL.")
+
+    try:
+        req = urllib.request.Request(
+            art_url,
+            headers={"User-Agent": "WallyMock/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = resp.read(MAX_FILE_SIZE + 1)
+    except Exception as exc:
+        raise HTTPException(400, f"Could not fetch artwork from the provided URL. ({exc})")
+
+    if len(data) > MAX_FILE_SIZE:
+        raise HTTPException(400, "Artwork image exceeds the 10 MB limit.")
+
+    try:
+        pil = Image.open(BytesIO(data))
+        pil.verify()
+    except Exception:
+        raise HTTPException(400, "The URL did not return a valid image file.")
+
+    pil = Image.open(BytesIO(data))
+    art_bytes = _to_jpeg(pil)
+    art_id = _save_image(art_bytes, "image/jpeg")
+
+    # Small thumbnail for the preview card
+    thumb = Image.open(BytesIO(art_bytes))
+    thumb.thumbnail((400, 220), Image.LANCZOS)
+    thumb_buf = BytesIO()
+    thumb.save(thumb_buf, format="JPEG", quality=82)
+    art_thumb_b64 = base64.b64encode(thumb_buf.getvalue()).decode("utf-8")
+
+    return HTMLResponse(content=_build_prefill_html(art_id, art_thumb_b64))
+
+
 # ── Shared picker-page builder ────────────────────────────────────────────────
 
 def _build_picker_html(
@@ -925,6 +1186,31 @@ async def mockup_picker_get(
         orientation = "H"
     if not (1 <= wall_measurement <= 9999):
         raise HTTPException(400, "Invalid measurement.")
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation))
+
+
+@app.post("/mockup/picker_prefill", response_class=HTMLResponse)
+async def mockup_picker_prefill(
+    room_file:        UploadFile = File(...),
+    art_id:           str        = Form(...),
+    wall_measurement: float      = Form(...),
+    orientation:      str        = Form("H"),
+) -> HTMLResponse:
+    """Prefill variant: artwork already stored; only room file is uploaded here."""
+    if not (1 <= wall_measurement <= 9999):
+        raise HTTPException(400, "Measurement must be between 1 and 9999 inches.")
+
+    orientation = orientation.strip().upper()
+    if orientation not in ("H", "V"):
+        orientation = "H"
+
+    # Confirm the artwork is still in the store (raises 410 if expired)
+    _load_image(art_id)
+
+    room_bytes, room_pil = await read_and_validate(room_file)
+    room_bytes = _to_jpeg(room_pil)
+    room_id = _save_image(room_bytes, "image/jpeg")
+
     return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation))
 
 
