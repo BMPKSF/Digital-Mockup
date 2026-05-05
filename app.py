@@ -9,8 +9,9 @@ import urllib.request
 import uuid
 from io import BytesIO
 
-from fastapi import FastAPI, Form, HTTPException, Query, UploadFile, File
+from fastapi import FastAPI, Form, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 from PIL import Image, ImageOps
 
 # ── Optional HEIF/HEIC support ────────────────────────────────────────────────
@@ -23,6 +24,19 @@ except ImportError:
 
 # ── App & constants ───────────────────────────────────────────────────────────
 app = FastAPI(title="Wall Mockup Tool")
+
+# Allow kenhoehn.ca to embed WallyMock in an iframe
+_ALLOWED_ORIGINS = {"https://kenhoehn.ca", "https://www.kenhoehn.ca"}
+
+class FrameAllowMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = (
+            "frame-ancestors 'self' https://kenhoehn.ca https://www.kenhoehn.ca"
+        )
+        return response
+
+app.add_middleware(FrameAllowMiddleware)
 
 MAX_FILE_SIZE = 10 * 1024 * 1024          # 10 MB
 ALLOWED_EXT: set[str] = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
