@@ -202,7 +202,7 @@ async def home() -> HTMLResponse:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#f5f2ec">
-<title>Wall Mockup Tool</title>
+<title>WallyMock</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -228,14 +228,14 @@ async def home() -> HTMLResponse:
   }
   .logo {
     font-family: Georgia, serif;
-    font-size: clamp(2rem, 4vw, 3rem);
+    font-size: clamp(2.2rem, 4.5vw, 3.4rem);
     letter-spacing: -0.02em; margin-bottom: 6px;
   }
-  .tagline { font-size: 1.05rem; font-style: italic; margin-bottom: 36px; }
+  .tagline { font-size: 1.15rem; font-style: italic; margin-bottom: 36px; }
 
   .how-section { width: 100%; margin-bottom: 0; }
   .how-section h2 {
-    font-family: Georgia, serif; font-size: 1.4rem;
+    font-family: Georgia, serif; font-size: 1.55rem;
     margin-bottom: 16px;
   }
   .steps { display: grid; grid-template-columns: 1fr; gap: 12px; }
@@ -248,16 +248,16 @@ async def home() -> HTMLResponse:
     display: flex; align-items: center; justify-content: center;
     font-size: 0.8rem; font-weight: 500; margin-bottom: 8px;
   }
-  .step-card h3 { font-size: 0.98rem; font-weight: 500; margin-bottom: 4px; }
-  .step-card p  { font-size: 0.85rem; line-height: 1.5; }
+  .step-card h3 { font-size: 1.08rem; font-weight: 500; margin-bottom: 4px; }
+  .step-card p  { font-size: 0.95rem; line-height: 1.55; }
 
   .upload-card { width: 100%; }
-  .upload-card h2 { font-family: Georgia, serif; font-size: 1.55rem; margin-bottom: 4px; }
+  .upload-card h2 { font-family: Georgia, serif; font-size: 1.7rem; margin-bottom: 4px; }
   .upload-card .card-sub {
-    font-size: 0.92rem; font-style: italic; margin-bottom: 20px;
+    font-size: 1rem; font-style: italic; margin-bottom: 20px;
   }
   label.field-label {
-    display: block; font-size: 0.82rem; text-transform: uppercase;
+    display: block; font-size: 0.9rem; text-transform: uppercase;
     letter-spacing: 0.09em; margin-bottom: 6px; margin-top: 16px;
   }
   label.field-label:first-of-type { margin-top: 0; }
@@ -293,6 +293,10 @@ async def home() -> HTMLResponse:
     transition: border-color .2s;
   }
   input:focus { border-color: var(--accent); }
+  input.field-error { border-color: #c8440a; background: #fff5f2; animation: errorShake .3s; }
+  @keyframes errorShake {
+    0%,100%{transform:translateX(0)} 25%{transform:translateX(-6px)} 75%{transform:translateX(6px)}
+  }
 
   .preview-thumb {
     max-width: 100%; max-height: 110px; border-radius: 0; margin-top: 10px;
@@ -313,8 +317,8 @@ async def home() -> HTMLResponse:
     border-color: var(--accent); background: #fff3ee;
   }
   .orient-card .icon  { font-size: 1.6rem; display: block; margin-bottom: 5px; line-height: 1; }
-  .orient-card .lbl   { font-size: 0.92rem; font-weight: 500; }
-  .orient-card .sublbl { font-size: 0.82rem; margin-top: 2px; }
+  .orient-card .lbl   { font-size: 1rem; font-weight: 500; }
+  .orient-card .sublbl { font-size: 0.9rem; margin-top: 2px; }
 
   button[type="submit"] {
     margin-top: 28px; width: 100%; padding: 14px;
@@ -337,7 +341,7 @@ async def home() -> HTMLResponse:
 <body>
 
 <div class="col-info">
-  <div class="logo">Wall Mockup</div>
+  <div class="logo">WallyMock</div>
   <p class="tagline">See any print to scale on any wall — in seconds</p>
 
   <div class="how-section">
@@ -370,7 +374,7 @@ async def home() -> HTMLResponse:
 <div class="col-form">
 <div class="upload-card">
   <h2>Create a Mockup</h2>
-  <p class="card-sub">Step 1 of 3 — Upload &amp; configure</p>
+  <p class="card-sub">Step 1 of 4 — Upload &amp; configure</p>
 
   <form action="/mockup/picker" enctype="multipart/form-data" method="post" id="mainForm">
 
@@ -453,7 +457,25 @@ function previewFile(input, containerId) {
   reader.readAsDataURL(file);
 }
 
-document.getElementById('mainForm').addEventListener('submit', () => {
+document.getElementById('mainForm').addEventListener('submit', e => {
+  const roomEl = document.getElementById('roomFile');
+  const artEl  = document.getElementById('artFile');
+  const measEl = document.getElementById('wallMeasInput');
+  const missing = [
+    [roomEl, roomEl.files.length === 0],
+    [artEl,  artEl.files.length === 0],
+    [measEl, measEl.value.trim() === ''],
+  ].filter(([, bad]) => bad).map(([el]) => el);
+  if (missing.length) {
+    e.preventDefault();
+    missing.forEach(el => {
+      el.classList.add('field-error');
+      el.addEventListener('change', () => el.classList.remove('field-error'), { once: true });
+      el.addEventListener('input',  () => el.classList.remove('field-error'), { once: true });
+    });
+    missing[0].focus();
+    return;
+  }
   const btn = document.getElementById('submitBtn');
   btn.innerHTML = '<span class="btn-spinner"></span>Uploading…';
   btn.disabled = true;
@@ -1246,6 +1268,15 @@ async def mockup_editor(
     <div class="toggle on" id="shadowToggle" onclick="toggleShadow()"></div>
   </div>
 
+  <span class="field-label">Light Direction</span>
+  <div class="dial-wrap">
+    <div class="dial-label-row">
+      <span>Drag to set light source</span>
+      <span class="dial-angle-val" id="dialAngleVal">315°</span>
+    </div>
+    <canvas id="dialCanvas" width="120" height="120"></canvas>
+  </div>
+
   <span class="field-label">Perspective Adjust</span>
   <div class="toggle-row">
     <span class="toggle-label">Skew picture corners to match wall angle</span>
@@ -1260,15 +1291,6 @@ async def mockup_editor(
   <button class="btn btn-danger btn-sm" id="removeBtn" onclick="removeActivePiece()">
     🗑 Remove This Print
   </button>
-
-  <span class="field-label">Light Direction</span>
-  <div class="dial-wrap">
-    <div class="dial-label-row">
-      <span>Drag to set light source</span>
-      <span class="dial-angle-val" id="dialAngleVal">315°</span>
-    </div>
-    <canvas id="dialCanvas" width="120" height="120"></canvas>
-  </div>
 
   <hr>
 
