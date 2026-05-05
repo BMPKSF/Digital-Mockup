@@ -342,7 +342,7 @@ async def home() -> HTMLResponse:
 <body>
 
 <div class="col-info">
-  <div class="logo">WallyMock</div>
+  <div class="logo">WallyMock<sup style="font-size:0.45em;vertical-align:super;letter-spacing:0;">TM</sup></div>
   <p class="tagline">See any print to scale on any wall — in seconds</p>
 
   <div class="how-section">
@@ -620,7 +620,7 @@ def _build_prefill_html(art_id: str, art_thumb_b64: str) -> str:
 </head>
 <body>
 <div class="card">
-  <div class="logo">WallyMock</div>
+  <div class="logo">WallyMock<sup style="font-size:0.45em;vertical-align:super;letter-spacing:0;">TM</sup></div>
   <p class="card-sub">Step 1 of 4 — Upload &amp; configure</p>
 
   <div class="art-preview-box">
