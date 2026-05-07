@@ -405,26 +405,28 @@ async def home() -> HTMLResponse:
            onchange="previewFile(this,'artPrev')">
     <div id="artPrev"></div>
 
-    <label class="field-label" for="wallMeasInput">Wall Width/Height Measurement (inches)</label>
-    <input type="number" name="wall_measurement" id="wallMeasInput"
-           step="0.1" min="1" max="9999" inputmode="decimal"
-           placeholder="e.g. 96" required>
-
     <label class="field-label">Print Orientation</label>
     <div class="orient-row">
-      <input type="radio" name="orientation" id="orH" value="H" checked>
+      <input type="radio" name="orientation" id="orH" value="H" onchange="updateMeasLabel()">
       <label class="orient-card" for="orH">
         <span class="icon">⬛️</span>
         <div class="lbl">Horizontal</div>
         <div class="sublbl">Landscape / wide print</div>
       </label>
 
-      <input type="radio" name="orientation" id="orV" value="V">
+      <input type="radio" name="orientation" id="orV" value="V" onchange="updateMeasLabel()">
       <label class="orient-card" for="orV">
         <span class="icon">▮</span>
         <div class="lbl">Vertical</div>
         <div class="sublbl">Portrait / tall print</div>
       </label>
+    </div>
+
+    <div id="measWrap" style="display:none;margin-top:0;">
+      <label class="field-label" id="measLabel" for="wallMeasInput"> </label>
+      <input type="number" name="wall_measurement" id="wallMeasInput"
+             step="0.1" min="1" max="9999" inputmode="decimal"
+             placeholder="e.g. 96">
     </div>
 
     <button type="submit" id="submitBtn">Next: Mark the Measurement →</button>
@@ -472,23 +474,38 @@ function previewFile(input, containerId) {
   reader.readAsDataURL(file);
 }
 
+function updateMeasLabel() {
+  const isV  = document.getElementById('orV').checked;
+  const wrap  = document.getElementById('measWrap');
+  const label = document.getElementById('measLabel');
+  label.textContent = isV ? 'Vertical wall height (inches)' : 'Horizontal wall width (inches)';
+  wrap.style.display = 'block';
+  document.getElementById('wallMeasInput').focus();
+  checkStep1Complete();
+}
+
 document.getElementById('mainForm').addEventListener('submit', e => {
   const roomEl = document.getElementById('roomFile');
   const artEl  = document.getElementById('artFile');
   const measEl = document.getElementById('wallMeasInput');
+  const orientOk = document.getElementById('orH').checked || document.getElementById('orV').checked;
   const missing = [
     [roomEl, roomEl.files.length === 0],
     [artEl,  artEl.files.length === 0],
     [measEl, measEl.value.trim() === ''],
   ].filter(([, bad]) => bad).map(([el]) => el);
-  if (missing.length) {
+  if (!orientOk || missing.length) {
     e.preventDefault();
+    if (!orientOk) {
+      document.querySelector('.orient-row').style.outline = '2px solid #c8440a';
+      document.querySelector('.orient-row').style.borderRadius = '10px';
+    }
     missing.forEach(el => {
       el.classList.add('field-error');
       el.addEventListener('change', () => el.classList.remove('field-error'), { once: true });
       el.addEventListener('input',  () => el.classList.remove('field-error'), { once: true });
     });
-    missing[0].focus();
+    if (missing.length) missing[0].focus();
     return;
   }
   const btn = document.getElementById('submitBtn');
@@ -496,12 +513,19 @@ document.getElementById('mainForm').addEventListener('submit', e => {
   btn.disabled = true;
 });
 
+['orH','orV'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    document.querySelector('.orient-row').style.outline = '';
+  });
+});
+
 function checkStep1Complete() {
-  const roomOk = document.getElementById('roomFile').files.length > 0;
-  const artOk = document.getElementById('artFile').files.length > 0;
-  const measOk = document.getElementById('wallMeasInput').value.trim() !== '';
+  const roomOk   = document.getElementById('roomFile').files.length > 0;
+  const artOk    = document.getElementById('artFile').files.length > 0;
+  const measOk   = document.getElementById('wallMeasInput').value.trim() !== '';
+  const orientOk = document.getElementById('orH').checked || document.getElementById('orV').checked;
   const badge = document.getElementById('stepOneBadge');
-  if (roomOk && artOk && measOk) {
+  if (roomOk && artOk && measOk && orientOk) {
     badge.textContent = '✓';
     badge.style.background = '#16a34a';
   } else {
@@ -512,13 +536,6 @@ function checkStep1Complete() {
 document.getElementById('roomFile').addEventListener('change', checkStep1Complete);
 document.getElementById('artFile').addEventListener('change', checkStep1Complete);
 document.getElementById('wallMeasInput').addEventListener('input', checkStep1Complete);
-
-['roomFile', 'artFile', 'wallMeasInput'].forEach(id => {
-  const el = document.getElementById(id);
-  el.addEventListener('invalid', () => el.setCustomValidity('Please fill in this field.'));
-  el.addEventListener('input', () => el.setCustomValidity(''));
-  el.addEventListener('change', () => el.setCustomValidity(''));
-});
 </script>
 </body>
 </html>""")
@@ -654,20 +671,15 @@ def _build_prefill_html(art_id: str, art_thumb_b64: str) -> str:
            onchange="previewFile(this,'roomPrev')">
     <div id="roomPrev"></div>
 
-    <label class="field-label" for="wallMeasInput">Wall Width/Height Measurement (inches)</label>
-    <input type="number" name="wall_measurement" id="wallMeasInput"
-           step="0.1" min="1" max="9999" inputmode="decimal"
-           placeholder="e.g. 96">
-
     <label class="field-label">Print Orientation</label>
     <div class="orient-row">
-      <input type="radio" name="orientation" id="orH" value="H" checked>
+      <input type="radio" name="orientation" id="orH" value="H" onchange="updateMeasLabel()">
       <label class="orient-card" for="orH">
         <span class="icon">⬛️</span>
         <div class="lbl">Horizontal</div>
         <div class="sublbl">Landscape / wide print</div>
       </label>
-      <input type="radio" name="orientation" id="orV" value="V">
+      <input type="radio" name="orientation" id="orV" value="V" onchange="updateMeasLabel()">
       <label class="orient-card" for="orV">
         <span class="icon">▮</span>
         <div class="lbl">Vertical</div>
@@ -675,11 +687,27 @@ def _build_prefill_html(art_id: str, art_thumb_b64: str) -> str:
       </label>
     </div>
 
+    <div id="measWrap" style="display:none;margin-top:0;">
+      <label class="field-label" id="measLabel" for="wallMeasInput"> </label>
+      <input type="number" name="wall_measurement" id="wallMeasInput"
+             step="0.1" min="1" max="9999" inputmode="decimal"
+             placeholder="e.g. 96">
+    </div>
+
     <button type="submit" id="submitBtn">Next: Mark the Measurement →</button>
   </form>
 </div>
 
 <script>
+function updateMeasLabel() {{
+  const isV  = document.getElementById('orV').checked;
+  const wrap  = document.getElementById('measWrap');
+  const label = document.getElementById('measLabel');
+  label.textContent = isV ? 'Vertical wall height (inches)' : 'Horizontal wall width (inches)';
+  wrap.style.display = 'block';
+  document.getElementById('wallMeasInput').focus();
+}}
+
 function previewFile(input, containerId) {{
   const file = input.files[0];
   const container = document.getElementById(containerId);
@@ -719,25 +747,36 @@ function previewFile(input, containerId) {{
 }}
 
 document.getElementById('mainForm').addEventListener('submit', e => {{
-  const roomEl = document.getElementById('roomFile');
-  const measEl = document.getElementById('wallMeasInput');
+  const roomEl   = document.getElementById('roomFile');
+  const measEl   = document.getElementById('wallMeasInput');
+  const orientOk = document.getElementById('orH').checked || document.getElementById('orV').checked;
   const missing = [
     [roomEl, roomEl.files.length === 0],
     [measEl, measEl.value.trim() === ''],
   ].filter(([, bad]) => bad).map(([el]) => el);
-  if (missing.length) {{
+  if (!orientOk || missing.length) {{
     e.preventDefault();
+    if (!orientOk) {{
+      document.querySelector('.orient-row').style.outline = '2px solid #c8440a';
+      document.querySelector('.orient-row').style.borderRadius = '10px';
+    }}
     missing.forEach(el => {{
       el.classList.add('field-error');
       el.addEventListener('change', () => el.classList.remove('field-error'), {{ once: true }});
       el.addEventListener('input',  () => el.classList.remove('field-error'), {{ once: true }});
     }});
-    missing[0].focus();
+    if (missing.length) missing[0].focus();
     return;
   }}
   const btn = document.getElementById('submitBtn');
   btn.innerHTML = '<span class="btn-spinner"></span>Uploading…';
   btn.disabled = true;
+}});
+
+['orH','orV'].forEach(id => {{
+  document.getElementById(id).addEventListener('change', () => {{
+    document.querySelector('.orient-row').style.outline = '';
+  }});
 }});
 </script>
 </body>
