@@ -2865,8 +2865,10 @@ async def email_mockup(
             s.login(_SMTP_USER, _SMTP_PASS)
             s.send_message(msg)
     except smtplib.SMTPAuthenticationError:
+        logger.error("SMTP auth failed for user %s", _SMTP_USER)
         raise HTTPException(500, "Email authentication failed.")
     except Exception as exc:
+        logger.error("SMTP send failed: %s: %s", type(exc).__name__, exc)
         raise HTTPException(500, f"Could not send email: {exc}")
     logger.info("Mockup emailed to %s", recipient)
     return Response(content='{"ok":true}', media_type="application/json")
