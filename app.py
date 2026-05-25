@@ -3,11 +3,30 @@ from __future__ import annotations
 import base64
 import html as html_mod
 import os
+import logging
+import re
+import smtplib
 import time
 import urllib.parse
 import urllib.request
 import uuid
+from email.message import EmailMessage
 from io import BytesIO
+
+# ── Load SMTP.env for local dev ───────────────────────────────────────────────
+_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "SMTP.env")
+if os.path.exists(_env_path):
+    with open(_env_path) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if not _line or _line.startswith("#"):
+                continue
+            # Support both KEY=value and KEY:value formats
+            for _sep in ("=", ":"):
+                if _sep in _line:
+                    _k, _, _v = _line.partition(_sep)
+                    os.environ.setdefault(_k.strip(), _v.strip())
+                    break
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, Response
@@ -58,6 +77,14 @@ _MIME_MAP: dict[str, str] = {
 # uid → (raw_bytes, mime_string, monotonic_timestamp)
 _store: dict[str, tuple[bytes, str, float]] = {}
 _STORE_TTL = 3_600  # seconds — prune uploads older than 1 hour
+
+# ── SMTP config (loaded from env) ─────────────────────────────────────────────
+_SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.internic.ca")
+_SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+_SMTP_USER = os.environ.get("SMTP_USER", "")
+_SMTP_PASS = os.environ.get("SMTP_PASS", "")
+
+logger = logging.getLogger("wallymock")
 
 
 def _save_image(data: bytes, mime: str) -> str:
@@ -783,6 +810,266 @@ document.getElementById('mainForm').addEventListener('submit', e => {{
 </html>"""
 
 
+def _build_restart_html(
+    room_id: str,
+    art_id: str,
+    wall_measurement: float,
+    orientation: str,
+    room_thumb_b64: str,
+    art_thumb_b64: str,
+) -> str:
+    """Return Step-1 HTML with both images pre-loaded from the store."""
+    orient_h_checked = "checked" if orientation == "H" else ""
+    orient_v_checked = "checked" if orientation == "V" else ""
+    meas_display = "block" if orientation in ("H", "V") else "none"
+    meas_label = "Vertical wall height (inches)" if orientation == "V" else "Horizontal wall width (inches)"
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#f5f2ec">
+<title>WallyMock</title>
+<style>
+  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  :root {{
+    --ink: #000; --paper: #f5f2ec; --accent: #c8440a;
+    --muted: #000; --border: #d8d4cc;
+  }}
+  body {{
+    background: var(--paper); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-weight: 300;
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    padding: 40px 20px;
+  }}
+  .card {{
+    background: #fff; border: 1px solid var(--border); border-radius: 18px;
+    padding: 40px 40px; max-width: 480px; width: 100%;
+  }}
+  .logo {{ font-family: Georgia, serif; font-size: 1.6rem; letter-spacing: -0.02em; margin-bottom: 4px; }}
+  .card-sub {{ font-size: 1rem; font-style: italic; margin-bottom: 24px; }}
+  .img-preview-box {{
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--paper); padding: 12px; margin-bottom: 12px;
+    display: flex; align-items: center; gap: 14px;
+  }}
+  .img-preview-box img {{
+    max-width: 80px; max-height: 80px; border-radius: 6px;
+    object-fit: contain; flex-shrink: 0;
+  }}
+  .img-preview-text {{ font-size: 0.9rem; line-height: 1.5; }}
+  .img-preview-text strong {{ display: block; margin-bottom: 2px; }}
+  .img-check {{ color: #16a34a; font-size: 1.1rem; }}
+  label.field-label {{
+    display: block; font-size: 0.9rem; text-transform: uppercase;
+    letter-spacing: 0.09em; margin-bottom: 6px; margin-top: 20px;
+  }}
+  input[type="number"] {{
+    width: 100%; padding: 10px 14px; border: 1px solid var(--border);
+    border-radius: 9px; font-family: inherit; font-size: 1rem;
+    background: var(--paper); color: var(--ink); outline: none;
+    transition: border-color .2s;
+  }}
+  input:focus {{ border-color: var(--accent); }}
+  .orient-row {{ display: flex; gap: 12px; margin-top: 6px; }}
+  .orient-row input[type="radio"] {{
+    position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none;
+  }}
+  .orient-card {{
+    flex: 1; border: 2px solid var(--border); border-radius: 10px;
+    padding: 13px 10px; text-align: center; cursor: pointer;
+    transition: border-color .2s, background .2s; background: var(--paper);
+    user-select: none; display: block;
+  }}
+  .orient-row input[type="radio"]:checked + .orient-card {{
+    border-color: var(--accent); background: #fff3ee;
+  }}
+  .orient-card .icon  {{ font-size: 1.6rem; display: block; margin-bottom: 5px; line-height: 1; }}
+  .orient-card .lbl   {{ font-size: 1rem; font-weight: 500; }}
+  .orient-card .sublbl {{ font-size: 0.9rem; margin-top: 2px; }}
+  button[type="submit"] {{
+    margin-top: 28px; width: 100%; padding: 14px;
+    background: var(--accent); color: #fff; border: none;
+    border-radius: 9px; font-family: inherit;
+    font-size: 1.05rem; font-weight: 500; cursor: pointer;
+    transition: opacity .2s, transform .15s;
+  }}
+  button[type="submit"]:hover {{ opacity: 0.88; transform: translateY(-1px); }}
+  .btn-spinner {{
+    display: inline-block; width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff;
+    border-radius: 50%; animation: btnSpin .7s linear infinite;
+    vertical-align: middle; margin-right: 8px;
+  }}
+  @keyframes btnSpin {{ to {{ transform: rotate(360deg); }} }}
+  @media (max-width: 600px) {{
+    .card {{ padding: 28px 20px; }}
+    button[type="submit"] {{ font-size: 1.2rem; padding: 16px; }}
+  }}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">WallyMock<sup style="font-size:0.45em;vertical-align:super;letter-spacing:0;">TM</sup></div>
+  <p class="card-sub">Step 1 of 4 — Review &amp; continue</p>
+
+  <div class="img-preview-box" id="roomPreviewBox">
+    <img id="roomThumb" src="data:image/jpeg;base64,{room_thumb_b64}" alt="Room photo">
+    <div class="img-preview-text">
+      <strong><span class="img-check">✓</span> Room photo loaded</strong>
+      <span id="roomPhotoSub">Your wall photo is ready to use.</span><br>
+      <a href="#" style="font-size:0.85rem;color:#c8440a;text-decoration:none;"
+         onclick="document.getElementById('newRoomFile').click();return false;">
+        Use a different photo
+      </a>
+    </div>
+  </div>
+
+  <div class="img-preview-box">
+    <img src="data:image/jpeg;base64,{art_thumb_b64}" alt="Artwork">
+    <div class="img-preview-text">
+      <strong><span class="img-check">✓</span> Artwork loaded</strong>
+      Your selected print is ready.
+    </div>
+  </div>
+
+  <form action="/mockup/picker_restart" enctype="multipart/form-data" method="post" id="restartForm">
+    <input type="hidden" name="room_id" id="roomIdField" value="{room_id}">
+    <input type="hidden" name="art_id"  value="{art_id}">
+    <input type="file" id="newRoomFile" name="room_file" accept="image/*"
+           style="display:none" onchange="onNewRoom(this)">
+
+    <label class="field-label">Print Orientation</label>
+    <div class="orient-row">
+      <input type="radio" name="orientation" id="orH" value="H" {orient_h_checked} onchange="updateMeasLabel()">
+      <label class="orient-card" for="orH">
+        <span class="icon">⬛️</span>
+        <div class="lbl">Horizontal</div>
+        <div class="sublbl">Landscape / wide print</div>
+      </label>
+      <input type="radio" name="orientation" id="orV" value="V" {orient_v_checked} onchange="updateMeasLabel()">
+      <label class="orient-card" for="orV">
+        <span class="icon">▮</span>
+        <div class="lbl">Vertical</div>
+        <div class="sublbl">Portrait / tall print</div>
+      </label>
+    </div>
+
+    <div id="measWrap" style="display:{meas_display};margin-top:0;">
+      <label class="field-label" id="measLabel" for="wallMeasInput">{meas_label}</label>
+      <input type="number" name="wall_measurement" id="wallMeasInput"
+             step="0.1" min="1" max="9999" inputmode="decimal"
+             value="{wall_measurement}" placeholder="e.g. 96">
+    </div>
+
+    <button type="submit" id="submitBtn">Next: Mark the Measurement →</button>
+  </form>
+</div>
+
+<script>
+function updateMeasLabel() {{
+  const isV  = document.getElementById('orV').checked;
+  const wrap  = document.getElementById('measWrap');
+  const label = document.getElementById('measLabel');
+  label.textContent = isV ? 'Vertical wall height (inches)' : 'Horizontal wall width (inches)';
+  wrap.style.display = 'block';
+  document.getElementById('wallMeasInput').focus();
+}}
+
+function onNewRoom(input) {{
+  const file = input.files[0]; if (!file) return;
+  document.getElementById('roomIdField').value = '';
+  const reader = new FileReader();
+  reader.onload = e => {{
+    document.getElementById('roomThumb').src = e.target.result;
+    document.getElementById('roomPhotoSub').textContent = file.name;
+  }};
+  reader.readAsDataURL(file);
+}}
+document.getElementById('restartForm').addEventListener('submit', e => {{
+  const measEl   = document.getElementById('wallMeasInput');
+  const orientOk = document.getElementById('orH').checked || document.getElementById('orV').checked;
+  if (!orientOk || measEl.value.trim() === '') {{
+    e.preventDefault();
+    if (!orientOk) {{
+      document.querySelector('.orient-row').style.outline = '2px solid #c8440a';
+      document.querySelector('.orient-row').style.borderRadius = '10px';
+    }}
+    if (measEl.value.trim() === '') {{
+      measEl.style.borderColor = '#c8440a';
+      measEl.focus();
+    }}
+    return;
+  }}
+  const btn = document.getElementById('submitBtn');
+  btn.innerHTML = '<span class="btn-spinner"></span>Loading…';
+  btn.disabled = true;
+}});
+</script>
+</body>
+</html>"""
+
+
+@app.get("/mockup/restart", response_class=HTMLResponse)
+async def mockup_restart(
+    room_id:          str   = Query(...),
+    art_id:           str   = Query(...),
+    wall_measurement: float = Query(...),
+    orientation:      str   = Query("H"),
+) -> HTMLResponse:
+    """Re-render step 1 with both images pre-loaded (used by all back-to-start links)."""
+    orientation = orientation.strip().upper()
+    if orientation not in ("H", "V"):
+        orientation = "H"
+    try:
+        room_data, _ = _load_image(room_id)
+        art_data,  _ = _load_image(art_id)
+    except HTTPException:
+        return HTMLResponse(
+            content='<meta http-equiv="refresh" content="0;url=/">',
+            status_code=200,
+        )
+    room_pil = Image.open(BytesIO(room_data))
+    room_pil.thumbnail((400, 220), Image.LANCZOS)
+    room_buf = BytesIO()
+    room_pil.save(room_buf, format="JPEG", quality=82)
+    room_thumb_b64 = base64.b64encode(room_buf.getvalue()).decode("utf-8")
+
+    art_pil = Image.open(BytesIO(art_data))
+    art_pil.thumbnail((400, 220), Image.LANCZOS)
+    art_buf = BytesIO()
+    art_pil.save(art_buf, format="JPEG", quality=82)
+    art_thumb_b64 = base64.b64encode(art_buf.getvalue()).decode("utf-8")
+
+    return HTMLResponse(content=_build_restart_html(
+        room_id, art_id, wall_measurement, orientation, room_thumb_b64, art_thumb_b64
+    ))
+
+
+@app.post("/mockup/picker_restart", response_class=HTMLResponse)
+async def mockup_picker_restart(
+    art_id:           str                    = Form(...),
+    wall_measurement: float                  = Form(...),
+    orientation:      str                    = Form("H"),
+    room_id:          str                    = Form(""),
+    room_file:        UploadFile | None      = File(None),
+) -> HTMLResponse:
+    """Accept stored image IDs from the restart page; optionally replace the room photo."""
+    orientation = orientation.strip().upper()
+    if orientation not in ("H", "V"):
+        orientation = "H"
+    if not (1 <= wall_measurement <= 9999):
+        raise HTTPException(400, "Measurement must be between 1 and 9999 inches.")
+    _load_image(art_id)
+    if room_file and room_file.filename:
+        room_bytes, room_pil = await read_and_validate(room_file)
+        room_id = _save_image(_to_jpeg(room_pil), "image/jpeg")
+    else:
+        _load_image(room_id)
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation))
+
+
 @app.get("/mockup/prefill", response_class=HTMLResponse)
 async def mockup_prefill(art_url: str = Query(...)) -> HTMLResponse:
     """Fetch artwork from a URL, store it, return a pre-populated Step-1 page."""
@@ -843,6 +1130,13 @@ def _build_picker_html(
     room_b64 = base64.b64encode(room_data).decode("utf-8")
 
     is_vertical = (orientation == "V")
+
+    restart_url = (
+        f"/mockup/restart?room_id={urllib.parse.quote(room_id)}"
+        f"&art_id={urllib.parse.quote(art_id)}"
+        f"&wall_measurement={wall_measurement}"
+        f"&orientation={orientation}"
+    )
 
     if is_vertical:
         point1_color  = "#7c3aed";  point2_color  = "#c8440a"
@@ -982,6 +1276,22 @@ def _build_picker_html(
     transition: opacity .2s, transform .15s;
   }}
   .back-row a:hover {{ opacity: 0.82; transform: translateY(-1px); }}
+  .zoom-bar {{
+    display: flex; align-items: center; gap: 6px;
+    max-width: 960px; width: 100%; margin-bottom: 4px;
+    justify-content: flex-end;
+  }}
+  .zoom-btn {{
+    width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0;
+    border: 1.5px solid var(--border); background: #fff;
+    font-size: 1.05rem; cursor: pointer; display: flex;
+    align-items: center; justify-content: center;
+    transition: border-color .15s, background .15s, color .15s;
+    user-select: none; line-height: 1;
+  }}
+  .zoom-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
+  .zoom-btn.active {{ border-color: var(--accent); background: var(--accent); color: #fff; }}
+  .zoom-level {{ font-size: 0.8rem; color: #666; min-width: 38px; text-align: center; }}
 </style>
 </head>
 <body>
@@ -1019,6 +1329,14 @@ def _build_picker_html(
   </ul>
 </div>
 
+<div class="zoom-bar">
+  <button class="zoom-btn" onclick="zoomOut()" title="Zoom out">&#x2212;</button>
+  <span class="zoom-level" id="zoomLevel">100%</span>
+  <button class="zoom-btn" onclick="zoomIn()" title="Zoom in">&#x2b;</button>
+  <button class="zoom-btn" id="panBtn" onclick="togglePan()" title="Pan / hand mode">&#x270b;</button>
+  <button class="zoom-btn" onclick="resetView()" title="Reset view" style="font-size:0.75rem">&#x21ba;</button>
+</div>
+
 <div class="canvas-wrap" id="canvasWrap">
   <canvas id="c"></canvas>
   <div class="canvas-loader" id="canvasLoader"><div class="spinner"></div></div>
@@ -1032,7 +1350,7 @@ def _build_picker_html(
   </button>
 </div>
 <div class="back-row">
-  <a href="/">← Back to Start</a>
+  <a href="{restart_url}">← Back to Step 1</a>
 </div>
 
 <form id="rf" action="/mockup/editor" method="post" style="display:none">
@@ -1060,6 +1378,63 @@ const ctx    = canvas.getContext('2d');
 const img    = new Image();
 let pt1 = null, pt2 = null, phase = 1;
 
+// ── View transform ────────────────────────────────────────────────────
+let viewScale = 1, viewOffX = 0, viewOffY = 0;
+let panMode = false, panning = false, panLastX = 0, panLastY = 0;
+const MIN_SCALE = 1, MAX_SCALE = 10;
+
+function clampView() {{
+  const minX = canvas.width  * (1 - viewScale);
+  const minY = canvas.height * (1 - viewScale);
+  viewOffX = Math.max(minX, Math.min(0, viewOffX));
+  viewOffY = Math.max(minY, Math.min(0, viewOffY));
+}}
+
+function updateZoomUI() {{
+  document.getElementById('zoomLevel').textContent = Math.round(viewScale * 100) + '%';
+  canvas.style.cursor = panMode ? 'grab' : 'crosshair';
+}}
+
+function zoomAt(factor, pivotX, pivotY) {{
+  const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, viewScale * factor));
+  viewOffX = pivotX - (pivotX - viewOffX) * (newScale / viewScale);
+  viewOffY = pivotY - (pivotY - viewOffY) * (newScale / viewScale);
+  viewScale = newScale;
+  if (viewScale <= MIN_SCALE) {{ viewOffX = 0; viewOffY = 0; }}
+  clampView(); draw(); updateZoomUI();
+}}
+
+function zoomIn()  {{ zoomAt(1.5, canvas.width/2, canvas.height/2); }}
+function zoomOut() {{ zoomAt(1/1.5, canvas.width/2, canvas.height/2); }}
+
+function resetView() {{
+  viewScale = 1; viewOffX = 0; viewOffY = 0;
+  updateZoomUI(); draw();
+}}
+
+function togglePan() {{
+  panMode = !panMode;
+  document.getElementById('panBtn').classList.toggle('active', panMode);
+  updateZoomUI();
+}}
+
+// Canvas display coords → image pixel coords
+function toImgCoords(clientX, clientY) {{
+  const rect = canvas.getBoundingClientRect();
+  const cx = (clientX - rect.left) * (canvas.width  / rect.width);
+  const cy = (clientY - rect.top)  * (canvas.height / rect.height);
+  return [(cx - viewOffX) / viewScale, (cy - viewOffY) / viewScale];
+}}
+
+// Canvas display coords (no image-space transform)
+function toCanvasCoords(clientX, clientY) {{
+  const rect = canvas.getBoundingClientRect();
+  return [
+    (clientX - rect.left) * (canvas.width  / rect.width),
+    (clientY - rect.top)  * (canvas.height / rect.height),
+  ];
+}}
+
 img.onload = () => {{
   document.getElementById('canvasLoader').style.display = 'none';
   canvas.width  = img.naturalWidth;
@@ -1072,15 +1447,20 @@ img.onerror = () => {{
 }};
 img.src = 'data:image/jpeg;base64,' + ROOM_B64;
 
-// ── Draw ─────────────────────────────────────────────────────────────────
+// ── Draw ─────────────────────────────────────────────────────────────
 function draw() {{
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.setTransform(viewScale, 0, 0, viewScale, viewOffX, viewOffY);
   ctx.drawImage(img, 0, 0);
+
+  // Scale-compensated sizes so overlays appear visually consistent
+  const invS = 1 / viewScale;
 
   if (pt1 && pt2) {{
     const midX = (pt1.x + pt2.x) / 2;
     const midY = (pt1.y + pt2.y) / 2;
-    const lw   = Math.max(2, canvas.width * 0.002);
+    const lw   = Math.max(2, canvas.width * 0.002) * invS;
 
     if (IS_VERT) {{
       ctx.fillStyle = 'rgba(124,58,237,0.10)';
@@ -1090,7 +1470,7 @@ function draw() {{
       arrowV(midX, pt1.y, -1, lw * 5);
       arrowV(midX, pt2.y,  1, lw * 5);
       ctx.fillStyle = P1_COLOR;
-      ctx.font = `600 ${{Math.max(12, canvas.width * 0.016)}}px DM Sans, sans-serif`;
+      ctx.font = `600 ${{Math.max(12, canvas.width * 0.016) * invS}}px DM Sans, sans-serif`;
       ctx.textAlign = 'center';
       ctx.fillText(WALL_MEAS + '"', midX + canvas.width * 0.025, midY);
     }} else {{
@@ -1103,13 +1483,15 @@ function draw() {{
       arrowH(pt1.x, lineY, -1, lw * 5);
       arrowH(pt2.x, lineY,  1, lw * 5);
       ctx.fillStyle = P1_COLOR;
-      ctx.font = `600 ${{Math.max(12, canvas.width * 0.016)}}px DM Sans, sans-serif`;
+      ctx.font = `600 ${{Math.max(12, canvas.width * 0.016) * invS}}px DM Sans, sans-serif`;
       ctx.textAlign = 'center';
       ctx.fillText(WALL_MEAS + '"', midX, lineY - canvas.height * 0.012);
     }}
   }}
   if (pt1) pinPoint(pt1, P1_COLOR, P1_BADGE);
   if (pt2) pinPoint(pt2, P2_COLOR, P2_BADGE);
+
+  ctx.restore();
 }}
 
 function arrowH(x, y, dir, size) {{
@@ -1125,9 +1507,10 @@ function arrowV(x, y, dir, size) {{
   ctx.closePath(); ctx.fill();
 }}
 function pinPoint(pt, color, label) {{
-  const r  = Math.max(12, canvas.width * 0.015);
-  const lw = Math.max(2, canvas.width * 0.003);
-  ctx.strokeStyle = color + 'cc'; ctx.lineWidth = lw; ctx.setLineDash([8,5]);
+  const invS = 1 / viewScale;
+  const r  = Math.max(12, canvas.width * 0.015) * invS;
+  const lw = Math.max(2, canvas.width * 0.003) * invS;
+  ctx.strokeStyle = color + 'cc'; ctx.lineWidth = lw; ctx.setLineDash([8 * invS, 5 * invS]);
   ctx.beginPath();
   if (IS_VERT) {{ ctx.moveTo(0, pt.y); ctx.lineTo(canvas.width, pt.y); }}
   else         {{ ctx.moveTo(pt.x, 0); ctx.lineTo(pt.x, canvas.height); }}
@@ -1135,24 +1518,119 @@ function pinPoint(pt, color, label) {{
   ctx.fillStyle = color;
   ctx.beginPath(); ctx.arc(pt.x, pt.y, r, 0, Math.PI*2); ctx.fill();
   ctx.fillStyle = '#fff';
-  ctx.font = `600 ${{Math.max(9, r*1.0)}}px DM Sans, sans-serif`;
+  ctx.font = `600 ${{Math.max(9, r * 1.0)}}px DM Sans, sans-serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(label, pt.x, pt.y);
   ctx.textBaseline = 'alphabetic';
 }}
 
-// ── Click handling ──────────────────────────────────────────────────────
-canvas.addEventListener('click', e => {{
-  if (canvas.width === 0) return;
+// ── Pan events ───────────────────────────────────────────────────────
+canvas.addEventListener('mousedown', e => {{
+  if (!panMode) return;
+  panning = true;
+  [panLastX, panLastY] = toCanvasCoords(e.clientX, e.clientY);
+  canvas.style.cursor = 'grabbing'; e.preventDefault();
+}});
+window.addEventListener('mousemove', e => {{
+  if (!panning) return;
+  const [cx, cy] = toCanvasCoords(e.clientX, e.clientY);
+  viewOffX += cx - panLastX; viewOffY += cy - panLastY;
+  panLastX = cx; panLastY = cy;
+  clampView(); draw();
+}});
+window.addEventListener('mouseup', () => {{
+  if (panning) {{ panning = false; canvas.style.cursor = panMode ? 'grab' : 'crosshair'; }}
+}});
+
+// Touch pan (single finger in pan mode)
+let touchPanActive = false;
+canvas.addEventListener('touchstart', e => {{
+  if (!panMode || e.touches.length !== 1) return;
+  touchPanActive = true;
+  const t = e.touches[0];
+  [panLastX, panLastY] = toCanvasCoords(t.clientX, t.clientY);
+  e.preventDefault();
+}}, {{passive: false}});
+window.addEventListener('touchmove', e => {{
+  if (!touchPanActive) return;
+  const t = e.touches[0];
+  const [cx, cy] = toCanvasCoords(t.clientX, t.clientY);
+  viewOffX += cx - panLastX; viewOffY += cy - panLastY;
+  panLastX = cx; panLastY = cy;
+  clampView(); draw(); e.preventDefault();
+}}, {{passive: false}});
+window.addEventListener('touchend', () => {{ touchPanActive = false; }});
+
+// Pinch-to-zoom (two fingers)
+let pinchStartDist = 0, pinchStartScale = 1, pinchStartMidX = 0, pinchStartMidY = 0, pinchStartOffX = 0, pinchStartOffY = 0;
+canvas.addEventListener('touchstart', e => {{
+  if (e.touches.length !== 2) return;
+  e.preventDefault();
+  const t1 = e.touches[0], t2 = e.touches[1];
+  pinchStartDist  = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+  pinchStartScale = viewScale;
+  pinchStartOffX  = viewOffX;
+  pinchStartOffY  = viewOffY;
   const rect = canvas.getBoundingClientRect();
-  const cx = (e.clientX - rect.left) * (canvas.width  / rect.width);
-  const cy = (e.clientY - rect.top)  * (canvas.height / rect.height);
+  pinchStartMidX = ((t1.clientX + t2.clientX)/2 - rect.left) * (canvas.width  / rect.width);
+  pinchStartMidY = ((t1.clientY + t2.clientY)/2 - rect.top)  * (canvas.height / rect.height);
+}}, {{passive: false}});
+window.addEventListener('touchmove', e => {{
+  if (e.touches.length !== 2) return;
+  e.preventDefault();
+  const t1 = e.touches[0], t2 = e.touches[1];
+  const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+  if (pinchStartDist < 1) return;
+  const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, pinchStartScale * dist / pinchStartDist));
+  viewOffX = pinchStartMidX - (pinchStartMidX - pinchStartOffX) * (newScale / pinchStartScale);
+  viewOffY = pinchStartMidY - (pinchStartMidY - pinchStartOffY) * (newScale / pinchStartScale);
+  viewScale = newScale;
+  if (viewScale <= MIN_SCALE) {{ viewOffX = 0; viewOffY = 0; }}
+  clampView(); draw(); updateZoomUI();
+}}, {{passive: false}});
+
+// Scroll-wheel zoom
+document.getElementById('canvasWrap').addEventListener('wheel', e => {{
+  e.preventDefault();
+  const [cx, cy] = toCanvasCoords(e.clientX, e.clientY);
+  zoomAt(e.deltaY < 0 ? 1.2 : 1/1.2, cx, cy);
+}}, {{passive: false}});
+
+// ── Click handling ──────────────────────────────────────────────────
+canvas.addEventListener('click', e => {{
+  if (panMode || canvas.width === 0) return;
+  const [ix, iy] = toImgCoords(e.clientX, e.clientY);
+  if (ix < 0 || ix > img.naturalWidth || iy < 0 || iy > img.naturalHeight) return;
   if (phase === 1) {{
-    pt1 = {{x: cx, y: cy}}; phase = 2;
+    pt1 = {{x: ix, y: iy}}; phase = 2;
     setStep(1,'done'); setStep(2,'active2');
     document.getElementById('t2').classList.remove('muted');
   }} else if (phase === 2) {{
-    pt2 = {{x: cx, y: cy}}; phase = 3;
+    pt2 = {{x: ix, y: iy}}; phase = 3;
+    setStep(2,'done');
+    const span = IS_VERT ? Math.abs(pt2.y - pt1.y) : Math.abs(pt2.x - pt1.x);
+    const ppi  = (span / WALL_MEAS).toFixed(1);
+    const chip = document.getElementById('ppiChip');
+    chip.textContent = ppi + ' px/in · ready ✓';
+    chip.style.display = 'block';
+    document.getElementById('nextBtn').disabled = false;
+    document.getElementById('readyMsg').style.display = 'flex';
+  }}
+  draw();
+}});
+
+// Touch tap for point placement (non-pan mode)
+canvas.addEventListener('touchend', e => {{
+  if (panMode || touchPanActive || e.changedTouches.length !== 1) return;
+  const t = e.changedTouches[0];
+  const [ix, iy] = toImgCoords(t.clientX, t.clientY);
+  if (ix < 0 || ix > img.naturalWidth || iy < 0 || iy > img.naturalHeight) return;
+  if (phase === 1) {{
+    pt1 = {{x: ix, y: iy}}; phase = 2;
+    setStep(1,'done'); setStep(2,'active2');
+    document.getElementById('t2').classList.remove('muted');
+  }} else if (phase === 2) {{
+    pt2 = {{x: ix, y: iy}}; phase = 3;
     setStep(2,'done');
     const span = IS_VERT ? Math.abs(pt2.y - pt1.y) : Math.abs(pt2.x - pt1.x);
     const ppi  = (span / WALL_MEAS).toFixed(1);
@@ -1351,6 +1829,13 @@ async def mockup_editor(
         f"&orientation={orientation}"
     )
 
+    restart_url = (
+        f"/mockup/restart?room_id={urllib.parse.quote(room_id)}"
+        f"&art_id={urllib.parse.quote(art_id)}"
+        f"&wall_measurement={wall_measurement}"
+        f"&orientation={orientation}"
+    )
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1412,7 +1897,6 @@ async def mockup_editor(
     .btn {{ font-size: 1.1rem; padding: 14px; }}
     .piece-name {{ font-size: 1.02rem; }}
     .piece-size {{ font-size: 0.92rem; }}
-    .btn-add {{ font-size: 1rem; padding: 11px; }}
   }}
 
   /* ── Panel typography ── */
@@ -1521,14 +2005,6 @@ async def mockup_editor(
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }}
   .piece-size  {{ font-size: 0.76rem; margin-top: 1px; }}
-  .btn-add {{
-    width: 100%; padding: 8px; margin-top: 6px; border-radius: 8px;
-    border: 1.5px dashed var(--border); background: transparent;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 0.88rem;
-    cursor: pointer; transition: border-color .15s, color .15s;
-  }}
-  .btn-add:hover {{ border-color: var(--accent); color: var(--accent); }}
-
   /* ── Perspective info ── */
   .persp-info {{
     background: #fff8f0; border: 1px solid #f0c090; border-radius: 8px;
@@ -1566,14 +2042,7 @@ async def mockup_editor(
   <div class="panel-title">Gallery Wall</div>
   <div class="panel-sub">Step 3 — add &amp; position prints</div>
 
-  <span class="field-label">Prints on Wall</span>
   <div class="piece-list" id="pieceList"></div>
-  <input type="file" id="addFileInput" accept="image/*" style="display:none"
-         onchange="onAddFile(this)">
-  <button class="btn-add" onclick="document.getElementById('addFileInput').click()">
-    + Add Another Print
-  </button>
-
   <hr>
 
   <span class="field-label" id="activePieceLabel">{long_axis_label} (inches)</span>
@@ -1633,12 +2102,13 @@ async def mockup_editor(
 
   <hr>
 
-  <button class="btn btn-primary" onclick="downloadMockup()">⬇ Download Mockup</button>
+  <button class="btn btn-primary" onclick="openEmailModal()">✉ Email Mockup</button>
   <a href="{back_url}" class="btn btn-ghost" style="text-decoration:none;display:block;
      text-align:center;margin-top:8px;">← Re-mark Wall</a>
+  <a href="{restart_url}" class="btn btn-ghost" style="text-decoration:none;display:block;
+     text-align:center;margin-top:4px;font-size:0.85rem;">← Back to Step 1</a>
 
   <p class="hint">
-    • <strong>Add prints</strong> with the button above the list.<br>
     • Click a print in the list — or on the canvas — to select it.<br>
     • <strong>Perspective:</strong> toggle on, drag corners, toggle off. Warp stays until Reset.<br>
     • <strong>Reset Adjustments</strong> returns the print to flat &amp; centred.
@@ -1797,7 +2267,15 @@ function renderPieceList() {{
 
 function syncPanelToActive() {{
   const p = active();
-  if (!p) return;
+  if (!p) {{
+    document.getElementById('activePieceLabel').textContent = 'No print selected';
+    document.getElementById('sizeInInput').value = '';
+    document.getElementById('sizeOther').textContent = '';
+    document.getElementById('shadowToggle').classList.remove('on');
+    document.getElementById('perspToggle').classList.remove('on');
+    document.getElementById('perspInfo').style.display = 'none';
+    return;
+  }}
   const isPort = p.aspect < 1;
   document.getElementById('activePieceLabel').textContent =
     (isPort ? 'Height' : 'Width') + ' — longest edge (inches)';
@@ -1903,8 +2381,8 @@ function _syncBoundsFromCorners(p) {{
   p.artX = Math.min(...xs); p.artY = Math.min(...ys);
 }}
 function _cornerHitTest(p, cx, cy) {{
-  // Slightly larger radius for touch accuracy
-  const r = Math.max(18, canvas.width * 0.018);
+  const isTouch = navigator.maxTouchPoints > 0;
+  const r = Math.max(isTouch ? 40 : 18, canvas.width * 0.018);
   for (let i = 0; i < p.corners.length; i++) {{
     const dx = cx - p.corners[i].x, dy = cy - p.corners[i].y;
     if (dx*dx + dy*dy < r*r) return i;
@@ -2014,7 +2492,8 @@ function _drawPiece(p, pieceIdx) {{
 
   // Corner handles (active piece in perspMode only)
   if (isActive && p.perspMode && hasWarp) {{
-    const hr=Math.max(7,canvas.width*0.009);
+    const isTouch = navigator.maxTouchPoints > 0;
+    const hr=Math.max(isTouch ? 14 : 7, canvas.width*0.009);
     p.corners.forEach((pt,i) => {{
       ctx.beginPath(); ctx.arc(pt.x,pt.y,hr,0,Math.PI*2);
       ctx.fillStyle = i===activeCorner?'#e8822a':'#fff'; ctx.fill();
@@ -2062,26 +2541,6 @@ function removeActivePiece() {{
   renderPieceList(); syncPanelToActive();
 }}
 
-// ── Add new print from file ───────────────────────────────────────────────
-function onAddFile(input) {{
-  const file = input.files[0]; if (!file) return;
-  const reader = new FileReader();
-  reader.onload = e => {{
-    const img = new Image();
-    img.onload = () => {{
-      if (!img.naturalHeight) return;
-      const asp = img.naturalWidth / img.naturalHeight;
-      const name = file.name.replace(/[.][^.]+$/, '').substring(0, 24) || ('Print ' + (pieces.length+1));
-      pieces.push(makePiece(img, asp, name));
-      activePieceIdx = pieces.length - 1;
-      renderPieceList(); syncPanelToActive();
-    }};
-    img.src = e.target.result;
-  }};
-  reader.readAsDataURL(file);
-  input.value = '';
-}}
-
 // ── Canvas coordinate helpers ─────────────────────────────────────────────
 function canvasCoords(e) {{
   const rect = canvas.getBoundingClientRect();
@@ -2119,6 +2578,10 @@ canvas.addEventListener('mousedown', e => {{
     if (np.corners.length===4) {{ const ctr=_cornersCenter(np); dragOffX=cx-ctr.x; dragOffY=cy-ctr.y; }}
     else {{ dragOffX=cx-np.artX; dragOffY=cy-np.artY; }}
     stage.classList.add('dragging'); e.preventDefault();
+  }} else if (idx < 0) {{
+    activePieceIdx = -1;
+    renderPieceList();
+    syncPanelToActive();
   }}
 }});
 
@@ -2166,6 +2629,10 @@ canvas.addEventListener('touchstart', e => {{
     if (np.corners.length===4) {{ const ctr=_cornersCenter(np); dragOffX=cx-ctr.x; dragOffY=cy-ctr.y; }}
     else {{ dragOffX=cx-np.artX; dragOffY=cy-np.artY; }}
     e.preventDefault();
+  }} else if (idx < 0) {{
+    activePieceIdx = -1;
+    renderPieceList();
+    syncPanelToActive();
   }}
 }}, {{passive: false}});
 
@@ -2275,10 +2742,134 @@ window.addEventListener('resize', () => {{
     }}
   }});
 }});
+
+// ── Email modal ───────────────────────────────────────────────────────────
+function openEmailModal() {{
+  document.getElementById('emailModal').style.display = 'flex';
+  document.getElementById('emailInput').value = '';
+  document.getElementById('emailError').style.display = 'none';
+  const btn = document.getElementById('emailSendBtn');
+  btn.textContent = 'Send'; btn.disabled = false; btn.style.background = '#c8440a';
+  setTimeout(() => document.getElementById('emailInput').focus(), 50);
+}}
+function closeEmailModal() {{
+  document.getElementById('emailModal').style.display = 'none';
+}}
+function sendEmail() {{
+  const email = document.getElementById('emailInput').value.trim();
+  const errEl = document.getElementById('emailError');
+  if (!email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {{
+    errEl.textContent = 'Please enter a valid email address.';
+    errEl.style.display = 'block';
+    return;
+  }}
+  errEl.style.display = 'none';
+  const savedActive = activePieceIdx, savedHover = hoverIdx;
+  activePieceIdx = -1; hoverIdx = -1; isDownloading = true;
+  dragging = false; activeCorner = -1;
+  draw();
+  const imageB64 = canvas.toDataURL('image/jpeg', 0.94).replace(/^data:image\\/jpeg;base64,/, '');
+  activePieceIdx = savedActive; hoverIdx = savedHover; isDownloading = false;
+  const btn = document.getElementById('emailSendBtn');
+  btn.textContent = 'Sending\u2026'; btn.disabled = true;
+  const fd = new FormData();
+  fd.append('recipient', email);
+  fd.append('image_b64', imageB64);
+  fetch('/mockup/email', {{ method: 'POST', body: fd }})
+    .then(r => r.ok ? r.json() : r.json().then(j => Promise.reject(j.detail || 'Error')))
+    .then(() => {{
+      btn.textContent = '\u2713 Sent!'; btn.style.background = '#16a34a';
+      setTimeout(closeEmailModal, 1800);
+    }})
+    .catch(err => {{
+      errEl.textContent = typeof err === 'string' ? err : 'Failed to send. Please try again.';
+      errEl.style.display = 'block';
+      btn.textContent = 'Send'; btn.disabled = false;
+    }});
+}}
 </script>
+
+<!-- ═══ Email Modal ═══ -->
+<div id="emailModal" style="display:none;position:fixed;inset:0;
+     background:rgba(0,0,0,0.55);z-index:200;
+     align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;padding:32px 28px;
+              max-width:380px;width:90%;box-shadow:0 8px 40px rgba(0,0,0,0.25);">
+    <h3 style="font-family:Georgia,serif;font-size:1.3rem;margin-bottom:8px;">Email Mockup</h3>
+    <p style="font-size:0.9rem;color:#555;margin-bottom:18px;line-height:1.5;">
+      Enter your email address and we&#39;ll send your mockup as a JPEG attachment.
+    </p>
+    <input id="emailInput" type="email" placeholder="you@example.com"
+           style="width:100%;padding:11px 14px;border:1.5px solid #d8d4cc;
+                  border-radius:9px;font-size:1rem;font-family:inherit;
+                  outline:none;margin-bottom:10px;box-sizing:border-box;"
+           onfocus="this.style.borderColor='#c8440a'"
+           onblur="this.style.borderColor='#d8d4cc'"
+           onkeydown="if(event.key==='Enter')sendEmail()">
+    <div id="emailError" style="display:none;color:#c8440a;
+         font-size:0.85rem;margin-bottom:10px;"></div>
+    <div style="display:flex;gap:10px;">
+      <button onclick="closeEmailModal()"
+              style="flex:1;padding:11px;border-radius:9px;border:1px solid #d8d4cc;
+                     background:#f5f2ec;font-family:inherit;font-size:0.95rem;
+                     font-weight:500;cursor:pointer;">Cancel</button>
+      <button id="emailSendBtn" onclick="sendEmail()"
+              style="flex:2;padding:11px;border-radius:9px;border:none;
+                     background:#c8440a;color:#fff;font-family:inherit;
+                     font-size:0.95rem;font-weight:500;cursor:pointer;
+                     transition:opacity .2s,background .3s;">Send</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>"""
     return HTMLResponse(content=html)
+
+
+# ── Email mockup endpoint ─────────────────────────────────────────────────────
+
+@app.post("/mockup/email")
+async def email_mockup(
+    recipient: str = Form(...),
+    image_b64: str = Form(...),
+) -> Response:
+    if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', recipient):
+        raise HTTPException(400, "Invalid email address.")
+    try:
+        img_bytes = base64.b64decode(image_b64)
+    except Exception:
+        raise HTTPException(400, "Invalid image data.")
+    if not _SMTP_USER or not _SMTP_PASS:
+        raise HTTPException(500, "Email sending is not configured on this server.")
+    msg = EmailMessage()
+    msg["From"] = f"WallyMock <{_SMTP_USER}>"
+    msg["To"] = recipient
+    msg["Bcc"] = _SMTP_USER
+    msg["Subject"] = "Your WallyMock Mockup"
+    msg.set_content(
+        "Hello there,\n\n"
+        "This is a visual of the beautiful Ken Hoehn picture you chose for your home or office. "
+        "We're really excited to have the piece on your wall, right where you have it placed in "
+        "the mock up, in that exact size!\n\n"
+        "An amazing piece of art can transform your experience at home!\n\n"
+        "We encourage you to call us at 403-675-6677 so we can answer additional questions you "
+        "might have and make recommendations for the finish you'd like, clarify shipping options, "
+        "offer production time estimates and present a great way for you to save money with our "
+        "incredible collector program. You can also email us at info@kenhoehn.ca if you like.\n\n"
+        "Thanks so much,\nKen"
+    )
+    msg.add_attachment(img_bytes, maintype="image", subtype="jpeg", filename="wall-mockup.jpg")
+    try:
+        with smtplib.SMTP(_SMTP_HOST, _SMTP_PORT, timeout=15) as s:
+            s.starttls()
+            s.login(_SMTP_USER, _SMTP_PASS)
+            s.send_message(msg)
+    except smtplib.SMTPAuthenticationError:
+        raise HTTPException(500, "Email authentication failed.")
+    except Exception as exc:
+        raise HTTPException(500, f"Could not send email: {exc}")
+    logger.info("Mockup emailed to %s", recipient)
+    return Response(content='{"ok":true}', media_type="application/json")
 
 
 # ── Image serving endpoint ────────────────────────────────────────────────────
