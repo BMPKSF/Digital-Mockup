@@ -3,3 +3,4 @@ uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
 Pillow>=10.3.0
 pillow-heif>=0.16.0
+resend>=2.0.0

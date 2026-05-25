@@ -5,12 +5,10 @@ import html as html_mod
 import os
 import logging
 import re
-import smtplib
 import time
 import urllib.parse
 import urllib.request
 import uuid
-from email.message import EmailMessage
 from io import BytesIO
 
 # ── Load SMTP.env for local dev ───────────────────────────────────────────────
@@ -79,10 +77,8 @@ _store: dict[str, tuple[bytes, str, float]] = {}
 _STORE_TTL = 3_600  # seconds — prune uploads older than 1 hour
 
 # ── SMTP config (loaded from env) ─────────────────────────────────────────────
-_SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.internic.ca")
-_SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-_SMTP_USER = os.environ.get("SMTP_USER", "")
-_SMTP_PASS = os.environ.get("SMTP_PASS", "")
+_FROM_EMAIL  = os.environ.get("SMTP_USER", "info@kenhoehn.ca")
+_RESEND_KEY  = os.environ.get("RESEND_API_KEY", "")
 
 logger = logging.getLogger("wallymock")
 
@@ -2839,36 +2835,32 @@ async def email_mockup(
         img_bytes = base64.b64decode(image_b64)
     except Exception:
         raise HTTPException(400, "Invalid image data.")
-    if not _SMTP_USER or not _SMTP_PASS:
+    if not _RESEND_KEY:
         raise HTTPException(500, "Email sending is not configured on this server.")
-    msg = EmailMessage()
-    msg["From"] = f"WallyMock <{_SMTP_USER}>"
-    msg["To"] = recipient
-    msg["Bcc"] = _SMTP_USER
-    msg["Subject"] = "Your WallyMock Mockup"
-    msg.set_content(
-        "Hello there,\n\n"
-        "This is a visual of the beautiful Ken Hoehn picture you chose for your home or office. "
-        "We're really excited to have the piece on your wall, right where you have it placed in "
-        "the mock up, in that exact size!\n\n"
-        "An amazing piece of art can transform your experience at home!\n\n"
-        "We encourage you to call us at 403-675-6677 so we can answer additional questions you "
-        "might have and make recommendations for the finish you'd like, clarify shipping options, "
-        "offer production time estimates and present a great way for you to save money with our "
-        "incredible collector program. You can also email us at info@kenhoehn.ca if you like.\n\n"
-        "Thanks so much,\nKen"
-    )
-    msg.add_attachment(img_bytes, maintype="image", subtype="jpeg", filename="wall-mockup.jpg")
     try:
-        with smtplib.SMTP(_SMTP_HOST, _SMTP_PORT, timeout=15) as s:
-            s.starttls()
-            s.login(_SMTP_USER, _SMTP_PASS)
-            s.send_message(msg)
-    except smtplib.SMTPAuthenticationError:
-        logger.error("SMTP auth failed for user %s", _SMTP_USER)
-        raise HTTPException(500, "Email authentication failed.")
+        import resend
+        resend.api_key = _RESEND_KEY
+        resend.Emails.send({
+            "from": f"WallyMock <{_FROM_EMAIL}>",
+            "to": [recipient],
+            "bcc": [_FROM_EMAIL],
+            "subject": "Your WallyMock Mockup",
+            "text": (
+                "Hello there,\n\n"
+                "This is a visual of the beautiful Ken Hoehn picture you chose for your home or office. "
+                "We're really excited to have the piece on your wall, right where you have it placed in "
+                "the mock up, in that exact size!\n\n"
+                "An amazing piece of art can transform your experience at home!\n\n"
+                "We encourage you to call us at 403-675-6677 so we can answer additional questions you "
+                "might have and make recommendations for the finish you'd like, clarify shipping options, "
+                "offer production time estimates and present a great way for you to save money with our "
+                "incredible collector program. You can also email us at info@kenhoehn.ca if you like.\n\n"
+                "Thanks so much,\nKen"
+            ),
+            "attachments": [{"filename": "wall-mockup.jpg", "content": list(img_bytes)}],
+        })
     except Exception as exc:
-        logger.error("SMTP send failed: %s: %s", type(exc).__name__, exc)
+        logger.error("Resend failed: %s: %s", type(exc).__name__, exc)
         raise HTTPException(500, f"Could not send email: {exc}")
     logger.info("Mockup emailed to %s", recipient)
     return Response(content='{"ok":true}', media_type="application/json")
