@@ -1539,7 +1539,7 @@ window.addEventListener('mouseup', () => {{
 }});
 
 // Touch pan (single finger in pan mode)
-let touchPanActive = false;
+let touchPanActive = false, pinchActive = false;
 canvas.addEventListener('touchstart', e => {{
   if (!panMode || e.touches.length !== 1) return;
   touchPanActive = true;
@@ -1555,12 +1555,13 @@ window.addEventListener('touchmove', e => {{
   panLastX = cx; panLastY = cy;
   clampView(); draw(); e.preventDefault();
 }}, {{passive: false}});
-window.addEventListener('touchend', () => {{ touchPanActive = false; }});
+window.addEventListener('touchend', (e) => {{ touchPanActive = false; if (e.touches.length === 0) pinchActive = false; }});
 
 // Pinch-to-zoom (two fingers)
 let pinchStartDist = 0, pinchStartScale = 1, pinchStartMidX = 0, pinchStartMidY = 0, pinchStartOffX = 0, pinchStartOffY = 0;
 canvas.addEventListener('touchstart', e => {{
   if (e.touches.length !== 2) return;
+  pinchActive = true;
   e.preventDefault();
   const t1 = e.touches[0], t2 = e.touches[1];
   pinchStartDist  = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
@@ -1617,10 +1618,11 @@ canvas.addEventListener('click', e => {{
 
 // Touch tap for point placement (non-pan mode)
 canvas.addEventListener('touchend', e => {{
-  if (panMode || touchPanActive || e.changedTouches.length !== 1) return;
+  if (panMode || touchPanActive || pinchActive || e.changedTouches.length !== 1) return;
   const t = e.changedTouches[0];
   const [ix, iy] = toImgCoords(t.clientX, t.clientY);
   if (ix < 0 || ix > img.naturalWidth || iy < 0 || iy > img.naturalHeight) return;
+  e.preventDefault(); // prevent synthetic click from double-placing a point
   if (phase === 1) {{
     pt1 = {{x: ix, y: iy}}; phase = 2;
     setStep(1,'done'); setStep(2,'active2');
@@ -2556,7 +2558,9 @@ function _topPieceAt(cx,cy) {{
 // ── Mouse events ──────────────────────────────────────────────────────────
 canvas.addEventListener('mousedown', e => {{
   if (dialDragging) return;
-  const [cx,cy] = canvasCoords(e), p = active();
+  const [cx,cy] = canvasCoords(e);
+  if (cx < 0 || cx > canvas.width || cy < 0 || cy > canvas.height) return;
+  const p = active();
   if (p && p.perspMode && p.corners.length===4) {{
     const ci = _cornerHitTest(p,cx,cy);
     if (ci >= 0) {{ activeCorner=ci; dragging=true; stage.classList.add('dragging'); e.preventDefault(); return; }}
