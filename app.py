@@ -2198,7 +2198,6 @@ function tryStart() {{
 // ── Drag state ────────────────────────────────────────────────────────────
 let dragging = false, dragOffX = 0, dragOffY = 0;
 let activeCorner = -1, hoverIdx = -1;
-let _deselOnEnd = false, _deselStartClientX = 0, _deselStartClientY = 0, _deselStartTime = 0;
 
 // ── Layout ────────────────────────────────────────────────────────────────
 function initLayout() {{
@@ -2613,7 +2612,6 @@ window.addEventListener('mouseup', () => {{
 
 // ── Touch events ──────────────────────────────────────────────────────────
 canvas.addEventListener('touchstart', e => {{
-  _deselOnEnd = false;
   const [cx,cy]=canvasCoords(e), p=active();
   if (p&&p.perspMode&&p.corners.length===4) {{
     const ci=_cornerHitTest(p,cx,cy);
@@ -2632,20 +2630,11 @@ canvas.addEventListener('touchstart', e => {{
     if (np.corners.length===4) {{ const ctr=_cornersCenter(np); dragOffX=cx-ctr.x; dragOffY=cy-ctr.y; }}
     else {{ dragOffX=cx-np.artX; dragOffY=cy-np.artY; }}
     e.preventDefault();
-  }} else if (idx < 0) {{
-    // Don't deselect when in perspective mode — user is trying to grab corners
-    const ap = pieces[activePieceIdx];
-    if (!ap || !ap.perspMode) {{
-      _deselOnEnd = true;
-      const t0 = e.changedTouches[0];
-      _deselStartClientX = t0.clientX; _deselStartClientY = t0.clientY;
-      _deselStartTime = Date.now();
-    }}
   }}
+  // Empty-canvas touch on mobile does nothing — no deselect
 }}, {{passive: false}});
 
 window.addEventListener('touchmove', e => {{
-  if (_deselOnEnd && !dragging) {{ _deselOnEnd = false; return; }} // scroll gesture — cancel deselect
   if (!dragging) return;
   const [cx,cy]=canvasCoords(e), p=active(); if (!p) return;
   if (p.perspMode&&activeCorner>=0) {{
@@ -2657,20 +2646,9 @@ window.addEventListener('touchmove', e => {{
   e.preventDefault();
 }}, {{passive: false}});
 
-window.addEventListener('touchend', (ev) => {{
+window.addEventListener('touchend', () => {{
   if (dragging) {{ const p=active(); if (p&&p.corners.length===4&&activeCorner===-1) _syncBoundsFromCorners(p); }}
   dragging=false; activeCorner=-1;
-  if (_deselOnEnd) {{
-    _deselOnEnd = false;
-    const t = ev.changedTouches && ev.changedTouches[0];
-    const moved = t ? Math.hypot(t.clientX - _deselStartClientX, t.clientY - _deselStartClientY) : 999;
-    const dur = Date.now() - _deselStartTime;
-    if (moved < 12 && dur < 500) {{ // genuine tap: small displacement + short duration
-      activePieceIdx = -1;
-      renderPieceList();
-      syncPanelToActive();
-    }}
-  }}
 }});
 
 // ── Light direction dial ──────────────────────────────────────────────────
