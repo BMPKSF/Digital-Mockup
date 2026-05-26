@@ -2198,7 +2198,7 @@ function tryStart() {{
 // ── Drag state ────────────────────────────────────────────────────────────
 let dragging = false, dragOffX = 0, dragOffY = 0;
 let activeCorner = -1, hoverIdx = -1;
-let _deselOnEnd = false; // deferred deselect — set on empty-canvas touch, confirmed on touchend
+let _deselOnEnd = false, _deselStartClientX = 0, _deselStartClientY = 0, _deselStartTime = 0;
 
 // ── Layout ────────────────────────────────────────────────────────────────
 function initLayout() {{
@@ -2635,7 +2635,12 @@ canvas.addEventListener('touchstart', e => {{
   }} else if (idx < 0) {{
     // Don't deselect when in perspective mode — user is trying to grab corners
     const ap = pieces[activePieceIdx];
-    if (!ap || !ap.perspMode) _deselOnEnd = true;
+    if (!ap || !ap.perspMode) {{
+      _deselOnEnd = true;
+      const t0 = e.changedTouches[0];
+      _deselStartClientX = t0.clientX; _deselStartClientY = t0.clientY;
+      _deselStartTime = Date.now();
+    }}
   }}
 }}, {{passive: false}});
 
@@ -2652,14 +2657,19 @@ window.addEventListener('touchmove', e => {{
   e.preventDefault();
 }}, {{passive: false}});
 
-window.addEventListener('touchend', () => {{
+window.addEventListener('touchend', (ev) => {{
   if (dragging) {{ const p=active(); if (p&&p.corners.length===4&&activeCorner===-1) _syncBoundsFromCorners(p); }}
   dragging=false; activeCorner=-1;
   if (_deselOnEnd) {{
     _deselOnEnd = false;
-    activePieceIdx = -1;
-    renderPieceList();
-    syncPanelToActive();
+    const t = ev.changedTouches && ev.changedTouches[0];
+    const moved = t ? Math.hypot(t.clientX - _deselStartClientX, t.clientY - _deselStartClientY) : 999;
+    const dur = Date.now() - _deselStartTime;
+    if (moved < 12 && dur < 500) {{ // genuine tap: small displacement + short duration
+      activePieceIdx = -1;
+      renderPieceList();
+      syncPanelToActive();
+    }}
   }}
 }});
 
