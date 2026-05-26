@@ -2086,7 +2086,7 @@ async def mockup_editor(
   <span class="field-label">Perspective Adjust</span>
   <div class="toggle-row">
     <span class="toggle-label">Skew picture corners to match wall angle</span>
-    <div class="toggle" id="perspToggle" ontouchend="event.preventDefault();togglePersp();" onclick="togglePersp()"></div>
+    <div class="toggle" id="perspToggle" ontouchstart="event.preventDefault();togglePersp();" onclick="togglePersp()"></div>
   </div>
   <div class="persp-info" id="perspInfo">
     <strong>Perspective mode on.</strong> Drag a corner handle to warp the print.
