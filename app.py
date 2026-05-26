@@ -2469,26 +2469,8 @@ function _drawPiece(p, pieceIdx) {{
 
   if (isDownloading) return;
 
-  // Selection / hover outline
-  const isActive = pieceIdx === activePieceIdx;
-  const isHover  = pieceIdx === hoverIdx;
-  if (isActive || isHover) {{
-    ctx.strokeStyle = isActive
-      ? (p.perspMode ? 'rgba(200,68,10,0.8)' : 'rgba(255,255,255,0.85)')
-      : 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = isActive ? Math.max(1.5,canvas.width*0.002) : 1;
-    ctx.setLineDash([6,4]);
-    if (hasWarp) {{
-      ctx.beginPath();
-      p.corners.forEach((c,i)=> i===0?ctx.moveTo(c.x,c.y):ctx.lineTo(c.x,c.y));
-      ctx.closePath(); ctx.stroke();
-    }} else {{
-      ctx.strokeRect(p.artX-1,p.artY-1,p.artW+2,p.artH+2);
-    }}
-    ctx.setLineDash([]);
-  }}
-
   // Corner handles (active piece in perspMode only)
+  const isActive = pieceIdx === activePieceIdx;
   if (isActive && p.perspMode && hasWarp) {{
     const isTouch = navigator.maxTouchPoints > 0;
     const hr=Math.max(isTouch ? 14 : 7, canvas.width*0.009);
