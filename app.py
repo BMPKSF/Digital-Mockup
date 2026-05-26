@@ -2086,7 +2086,7 @@ async def mockup_editor(
   <span class="field-label">Perspective Adjust</span>
   <div class="toggle-row">
     <span class="toggle-label">Skew picture corners to match wall angle</span>
-    <div class="toggle" id="perspToggle" onclick="togglePersp()"></div>
+    <div class="toggle" id="perspToggle" ontouchend="event.preventDefault();togglePersp();" onclick="togglePersp()"></div>
   </div>
   <div class="persp-info" id="perspInfo">
     <strong>Perspective mode on.</strong> Drag a corner handle to warp the print.
@@ -2507,6 +2507,7 @@ function startLoop() {{
 
 // ── Toggle perspective ────────────────────────────────────────────────────
 function togglePersp() {{
+  if (activePieceIdx < 0 && pieces.length > 0) selectPiece(0);
   const p = active(); if (!p) return;
   p.perspMode = !p.perspMode;
   document.getElementById('perspToggle').classList.toggle('on', p.perspMode);
@@ -2632,7 +2633,9 @@ canvas.addEventListener('touchstart', e => {{
     else {{ dragOffX=cx-np.artX; dragOffY=cy-np.artY; }}
     e.preventDefault();
   }} else if (idx < 0) {{
-    _deselOnEnd = true; // defer deselect — confirmed on touchend if finger didn't scroll
+    // Don't deselect when in perspective mode — user is trying to grab corners
+    const ap = pieces[activePieceIdx];
+    if (!ap || !ap.perspMode) _deselOnEnd = true;
   }}
 }}, {{passive: false}});
 
