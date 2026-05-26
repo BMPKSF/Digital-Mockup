@@ -2198,6 +2198,7 @@ function tryStart() {{
 // ── Drag state ────────────────────────────────────────────────────────────
 let dragging = false, dragOffX = 0, dragOffY = 0;
 let activeCorner = -1, hoverIdx = -1;
+let _deselOnEnd = false; // deferred deselect — set on empty-canvas touch, confirmed on touchend
 
 // ── Layout ────────────────────────────────────────────────────────────────
 function initLayout() {{
@@ -2611,6 +2612,7 @@ window.addEventListener('mouseup', () => {{
 
 // ── Touch events ──────────────────────────────────────────────────────────
 canvas.addEventListener('touchstart', e => {{
+  _deselOnEnd = false;
   const [cx,cy]=canvasCoords(e), p=active();
   if (p&&p.perspMode&&p.corners.length===4) {{
     const ci=_cornerHitTest(p,cx,cy);
@@ -2630,13 +2632,12 @@ canvas.addEventListener('touchstart', e => {{
     else {{ dragOffX=cx-np.artX; dragOffY=cy-np.artY; }}
     e.preventDefault();
   }} else if (idx < 0) {{
-    activePieceIdx = -1;
-    renderPieceList();
-    syncPanelToActive();
+    _deselOnEnd = true; // defer deselect — confirmed on touchend if finger didn't scroll
   }}
 }}, {{passive: false}});
 
 window.addEventListener('touchmove', e => {{
+  if (_deselOnEnd && !dragging) {{ _deselOnEnd = false; return; }} // scroll gesture — cancel deselect
   if (!dragging) return;
   const [cx,cy]=canvasCoords(e), p=active(); if (!p) return;
   if (p.perspMode&&activeCorner>=0) {{
@@ -2651,6 +2652,12 @@ window.addEventListener('touchmove', e => {{
 window.addEventListener('touchend', () => {{
   if (dragging) {{ const p=active(); if (p&&p.corners.length===4&&activeCorner===-1) _syncBoundsFromCorners(p); }}
   dragging=false; activeCorner=-1;
+  if (_deselOnEnd) {{
+    _deselOnEnd = false;
+    activePieceIdx = -1;
+    renderPieceList();
+    syncPanelToActive();
+  }}
 }});
 
 // ── Light direction dial ──────────────────────────────────────────────────
