@@ -1856,7 +1856,7 @@ async def mockup_editor(
     display: grid; grid-template-columns: 1fr 320px;
   }}
   .stage {{ position: relative; overflow: hidden; background: #111; }}
-  #mainCanvas {{ display: block; cursor: default; }}
+  #mainCanvas {{ display: block; cursor: default; touch-action: none; }}
   .stage.dragging {{ cursor: grabbing !important; }}
   .panel {{
     background: var(--panel); border-left: 1px solid var(--border);
@@ -2505,9 +2505,13 @@ function startLoop() {{
 }}
 
 // ── Toggle perspective ────────────────────────────────────────────────────
+let _perspToggleLocked = false;
 function togglePersp() {{
+  if (_perspToggleLocked) return;
+  _perspToggleLocked = true;
+  setTimeout(() => {{ _perspToggleLocked = false; }}, 600);
   if (activePieceIdx < 0 && pieces.length > 0) selectPiece(0);
-  const p = active(); if (!p) return;
+  const p = active(); if (!p) {{ _perspToggleLocked = false; return; }}
   p.perspMode = !p.perspMode;
   document.getElementById('perspToggle').classList.toggle('on', p.perspMode);
   document.getElementById('perspInfo').style.display = p.perspMode ? 'block' : 'none';
@@ -2556,14 +2560,14 @@ function _topPieceAt(cx,cy) {{
   return -1;
 }}
 
-// ── Touch device detection (permanently disables ghost mousedown on mobile) ──
-let _isTouchDevice = false;
-document.addEventListener('touchstart', () => {{ _isTouchDevice = true; }}, {{passive:true, once:true}});
+// ── Ghost mousedown suppression (1 s window after any touch on the page) ──
+let _lastTouchTime = 0;
+document.addEventListener('touchstart', () => {{ _lastTouchTime = Date.now(); }}, {{passive: true}});
 
 // ── Mouse events ──────────────────────────────────────────────────────────
 canvas.addEventListener('mousedown', e => {{
   if (dialDragging) return;
-  if (_isTouchDevice) return; // touch device: all interaction via touchstart, ignore ghost mousedown
+  if (Date.now() - _lastTouchTime < 1000) return; // suppress ghost mousedown on touch devices
   const [cx,cy] = canvasCoords(e);
   if (cx < 0 || cx > canvas.width || cy < 0 || cy > canvas.height) return;
   const p = active();
