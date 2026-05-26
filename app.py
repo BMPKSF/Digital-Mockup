@@ -2556,10 +2556,14 @@ function _topPieceAt(cx,cy) {{
   return -1;
 }}
 
+// ── Touch device detection (permanently disables ghost mousedown on mobile) ──
+let _isTouchDevice = false;
+document.addEventListener('touchstart', () => {{ _isTouchDevice = true; }}, {{passive:true, once:true}});
+
 // ── Mouse events ──────────────────────────────────────────────────────────
 canvas.addEventListener('mousedown', e => {{
   if (dialDragging) return;
-  if (Date.now() - _lastTouchEnd < 500) return; // suppress ghost mousedown after touch
+  if (_isTouchDevice) return; // touch device: all interaction via touchstart, ignore ghost mousedown
   const [cx,cy] = canvasCoords(e);
   if (cx < 0 || cx > canvas.width || cy < 0 || cy > canvas.height) return;
   const p = active();
@@ -2647,9 +2651,7 @@ window.addEventListener('touchmove', e => {{
   e.preventDefault();
 }}, {{passive: false}});
 
-let _lastTouchEnd = 0;
 window.addEventListener('touchend', () => {{
-  _lastTouchEnd = Date.now();
   if (dragging) {{ const p=active(); if (p&&p.corners.length===4&&activeCorner===-1) _syncBoundsFromCorners(p); }}
   dragging=false; activeCorner=-1;
 }});
