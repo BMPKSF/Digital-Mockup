@@ -637,19 +637,35 @@ def _fetch_variants(ref: str) -> str:
         if attrs.get("Frame", "").lower() != "unframed":
             continue
         size_str = attrs.get("Size", "")
-        m = re.match(r"(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)", size_str, re.IGNORECASE)
-        if not m:
-            continue
-        w, h = float(m.group(1)), float(m.group(2))
-        orientation = attrs.get("Orientation")
         price_val = v.get("priceMoney", {}).get("value", "")
         try:
             price_str = f"CA${float(price_val):,.0f}" if price_val else ""
         except Exception:
             price_str = ""
-        long_edge = max(w, h)
-        short_edge = min(w, h)
-        aspect = round(long_edge / short_edge, 4) if short_edge > 0 else 1.0
+        # Format A: "W x H in." or "W x H" (open editions, or limited with explicit dims)
+        m = re.match(r"(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)", size_str, re.IGNORECASE)
+        if m:
+            w, h = float(m.group(1)), float(m.group(2))
+            long_edge = max(w, h)
+            short_edge = min(w, h)
+            orientation = attrs.get("Orientation")
+            aspect = round(long_edge / short_edge, 4) if short_edge > 0 else 1.0
+        else:
+            # Format B: "N in." + "Aspect Ratio": "W:H Aspect Ratio"
+            m2 = re.match(r"(\d+(?:\.\d+)?)\s*in\.", size_str, re.IGNORECASE)
+            ar_m = re.match(r"(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)", attrs.get("Aspect Ratio", ""))
+            if m2 and ar_m:
+                long_edge = float(m2.group(1))
+                ar_a, ar_b = float(ar_m.group(1)), float(ar_m.group(2))
+                ar_norm = max(ar_a, ar_b) / min(ar_a, ar_b) if min(ar_a, ar_b) > 0 else 1.0
+                aspect = round(ar_norm, 4)
+                short_edge = round(long_edge / ar_norm, 2)
+                w, h = long_edge, short_edge
+                orientation = None
+            else:
+                # Unknown format — skip but log so we can add support later
+                logging.warning("_fetch_variants: unrecognised size format %r attrs=%r", size_str, attrs)
+                continue
         variants.append({
             "id": v.get("id", ""),
             "size": size_str,
@@ -1985,11 +2001,11 @@ async def mockup_editor(
             )
         preset_html = "\n    ".join(preset_parts)
         cart_ui_html = (
-            '<button class="btn btn-cart" id="addToCartBtn" style="display:none;margin-top:10px;" onclick="addToCart()">'
-            'Add to Cart</button>\n'
+            '<button class="btn btn-cart" id="orderBtn" style="display:none;margin-top:10px;" onclick="orderPrint()">'
+            'Order This Print \u2192</button>\n'
             '  <a class="btn btn-ghost" id="contactSizeBtn" href="https://kenhoehn.ca/contact" '
             'target="_blank" rel="noopener" style="display:none;margin-top:6px;text-align:center;'
-            'text-decoration:none;">Contact Us for a Custom Size →</a>'
+            'text-decoration:none;">Contact Us for a Custom Size \u2192</a>'
         )
     else:
         preset_html = (
@@ -3013,57 +3029,37 @@ function sendEmail() {{
   </div>
 </div>
 <script>
-// ── Product size selection & Add to Cart ──────────────────────────────────
+// ── Product size selection & Order ────────────────────────────────────────
 let selectedVariantId = null;
 let selectedVariantPrice = '';
+const _REF = {json.dumps(ref)};
 
 function selectProductSize(variantId, price, longEdge, btn) {{
   selectedVariantId = variantId;
   selectedVariantPrice = price;
   applyPreset(longEdge, btn);
-  updateCartUI();
+  updateOrderUI();
 }}
 
-function updateCartUI() {{
+function updateOrderUI() {{
   if (!HAS_PRODUCT_SIZES) return;
-  const cartBtn    = document.getElementById('addToCartBtn');
+  const orderBtn   = document.getElementById('orderBtn');
   const contactBtn = document.getElementById('contactSizeBtn');
-  if (!cartBtn) return;
+  if (!orderBtn) return;
   if (selectedVariantId) {{
-    cartBtn.textContent = 'Add to Cart' + (selectedVariantPrice ? ' — ' + selectedVariantPrice : '');
-    cartBtn.style.display = 'block';
+    orderBtn.textContent = 'Order This Print \u2192' + (selectedVariantPrice ? ' \u2014 ' + selectedVariantPrice : '');
+    orderBtn.style.display = 'block';
     if (contactBtn) contactBtn.style.display = 'none';
   }} else {{
-    cartBtn.style.display = 'none';
+    orderBtn.style.display = 'none';
     if (contactBtn) contactBtn.style.display = 'block';
   }}
 }}
 
-function addToCart() {{
-  if (!selectedVariantId) return;
-  const btn = document.getElementById('addToCartBtn');
-  btn.textContent = 'Adding…';
-  btn.disabled = true;
-  window.parent.postMessage({{
-    action: 'wallymock_addToCart',
-    variantId: selectedVariantId
-  }}, 'https://kenhoehn.ca');
+function orderPrint() {{
+  if (!selectedVariantId || !_REF) return;
+  window.parent.location.href = _REF + '?variant=' + encodeURIComponent(selectedVariantId);
 }}
-
-window.addEventListener('message', function(e) {{
-  if (e.origin !== 'https://kenhoehn.ca') return;
-  const btn = document.getElementById('addToCartBtn');
-  if (!btn || !e.data) return;
-  if (e.data.action === 'wallymock_cartSuccess') {{
-    btn.textContent = 'Added! View Cart →';
-    btn.disabled = false;
-    btn.onclick = function() {{ window.parent.location.href = '/checkout'; }};
-  }} else if (e.data.action === 'wallymock_cartError') {{
-    btn.textContent = 'Could not add to cart — try again';
-    btn.disabled = false;
-    btn.onclick = addToCart;
-  }}
-}});
 
 if (HAS_PRODUCT_SIZES) {{
   const _origOnSizeInput = onSizeInput;
@@ -3083,7 +3079,7 @@ if (HAS_PRODUCT_SIZES) {{
       selectedVariantId = null;
       selectedVariantPrice = '';
     }}
-    updateCartUI();
+    updateOrderUI();
   }};
 }}
 </script>
