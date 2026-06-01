@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import html as html_mod
+import json
 import os
 import logging
 import re
@@ -610,9 +611,52 @@ document.getElementById('wallMeasInput').addEventListener('input', checkStep1Com
 </html>""")
 
 
+def _fetch_variants(ref: str) -> str:
+    """Fetch Squarespace product JSON and return filtered Unframed variants as a JSON string."""
+    if not ref or not ref.startswith("/"):
+        return "[]"
+    try:
+        url = "https://kenhoehn.ca" + ref + "?format=json-pretty"
+        req = urllib.request.Request(url, headers={"User-Agent": "WallyMock/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read(2 * 1024 * 1024))
+    except Exception:
+        return "[]"
+    variants = []
+    for v in data.get("variants", []):
+        attrs = v.get("attributes", {})
+        if attrs.get("Frame", "").lower() != "unframed":
+            continue
+        size_str = attrs.get("Size", "")
+        m = re.match(r"(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)", size_str, re.IGNORECASE)
+        if not m:
+            continue
+        w, h = float(m.group(1)), float(m.group(2))
+        orientation = attrs.get("Orientation")
+        price_val = v.get("priceMoney", {}).get("value", "")
+        try:
+            price_str = f"CA${float(price_val):,.0f}" if price_val else ""
+        except Exception:
+            price_str = ""
+        long_edge = max(w, h)
+        short_edge = min(w, h)
+        aspect = round(long_edge / short_edge, 4) if short_edge > 0 else 1.0
+        variants.append({
+            "id": v.get("id", ""),
+            "size": size_str,
+            "w": w,
+            "h": h,
+            "orientation": orientation,
+            "price": price_str,
+            "aspect": aspect,
+            "long": long_edge,
+        })
+    return json.dumps(variants)
+
+
 # ── Step 1b — Prefill flow (artwork supplied via URL) ─────────────────────────
 
-def _build_prefill_html(art_id: str, art_thumb_b64: str) -> str:
+def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants_json: str = "[]") -> str:
     """Return Step-1 HTML with artwork pre-loaded; client only supplies room + measurement."""
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -733,6 +777,8 @@ def _build_prefill_html(art_id: str, art_thumb_b64: str) -> str:
 
   <form action="/mockup/picker_prefill" enctype="multipart/form-data" method="post" id="mainForm">
     <input type="hidden" name="art_id" value="{art_id}">
+    <input type="hidden" name="ref" value="{html_mod.escape(ref)}">
+    <input type="hidden" name="variants_json" value="{html_mod.escape(variants_json)}">
 
     <label class="field-label" for="roomFile">Room / Wall Photo</label>
     <input type="file" name="room_file" id="roomFile" accept="image/*"
@@ -1154,7 +1200,7 @@ async def mockup_picker_restart(
 
 
 @app.get("/mockup/prefill", response_class=HTMLResponse)
-async def mockup_prefill(art_url: str = Query(...)) -> HTMLResponse:
+async def mockup_prefill(art_url: str = Query(...), ref: str = Query("")) -> HTMLResponse:
     """Fetch artwork from a URL, store it, return a pre-populated Step-1 page."""
     parsed = urllib.parse.urlparse(art_url)
     if parsed.scheme not in ("http", "https"):
@@ -1190,7 +1236,8 @@ async def mockup_prefill(art_url: str = Query(...)) -> HTMLResponse:
     thumb.save(thumb_buf, format="JPEG", quality=82)
     art_thumb_b64 = base64.b64encode(thumb_buf.getvalue()).decode("utf-8")
 
-    return HTMLResponse(content=_build_prefill_html(art_id, art_thumb_b64))
+    variants_json = _fetch_variants(ref)
+    return HTMLResponse(content=_build_prefill_html(art_id, art_thumb_b64, ref, variants_json))
 
 
 # ── Shared picker-page builder ────────────────────────────────────────────────
@@ -1200,6 +1247,8 @@ def _build_picker_html(
     art_id:  str,
     wall_measurement: float,
     orientation: str,
+    ref: str = "",
+    variants_json: str = "[]",
 ) -> str:
     """Return the full Step-2 picker HTML string."""
     room_data, _ = _load_image(room_id)
@@ -1441,6 +1490,8 @@ def _build_picker_html(
   <input type="hidden" name="art_id"           value="{art_id}">
   <input type="hidden" name="wall_measurement" value="{wall_measurement}">
   <input type="hidden" name="orientation"      value="{orientation}">
+  <input type="hidden" name="ref"              value="{html_mod.escape(ref)}">
+  <input type="hidden" name="variants_json"    value="{html_mod.escape(variants_json)}">
   <input type="hidden" name="pt1_x"            id="fPt1x">
   <input type="hidden" name="pt1_y"            id="fPt1y">
   <input type="hidden" name="pt2_x"            id="fPt2x">
@@ -1811,6 +1862,8 @@ async def mockup_picker_prefill(
     art_id:           str        = Form(...),
     wall_measurement: float      = Form(...),
     orientation:      str        = Form("H"),
+    ref:              str        = Form(""),
+    variants_json:    str        = Form("[]"),
 ) -> HTMLResponse:
     """Prefill variant: artwork already stored; only room file is uploaded here."""
     if not (1 <= wall_measurement <= 9999):
@@ -1827,7 +1880,7 @@ async def mockup_picker_prefill(
     room_bytes = _to_jpeg(room_pil)
     room_id = _save_image(room_bytes, "image/jpeg")
 
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation))
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json))
 
 
 # ── Step 3 — Interactive Editor ───────────────────────────────────────────────
@@ -1842,6 +1895,8 @@ async def mockup_editor(
     pt1_y:            float = Form(...),
     pt2_x:            float = Form(...),
     pt2_y:            float = Form(...),
+    ref:              str   = Form(""),
+    variants_json:    str   = Form("[]"),
 ) -> HTMLResponse:
     orientation = orientation.strip().upper()
     if orientation not in ("H", "V"):
@@ -1887,6 +1942,55 @@ async def mockup_editor(
             "Please go back and re-mark a wider span."
         )
     ppi_orig = span_px / wall_measurement   # original image pixels per inch
+
+    # Parse and filter product variants for Add to Cart
+    try:
+        variants_list = json.loads(variants_json)
+    except Exception:
+        variants_list = []
+
+    orientation_filter = "Portrait" if is_vertical else "Landscape"
+    art_aspect_norm = max(art_aspect, 1.0 / art_aspect) if art_aspect > 0 else 1.0
+
+    matching_variants = []
+    for v in variants_list:
+        if v.get("orientation") is not None and v["orientation"] != orientation_filter:
+            continue
+        v_aspect = v.get("aspect", 1.0)
+        if abs(v_aspect - art_aspect_norm) / max(art_aspect_norm, 0.001) > 0.07:
+            continue
+        matching_variants.append(v)
+
+    has_product_sizes = bool(matching_variants)
+    variants_js = json.dumps(matching_variants)
+
+    if has_product_sizes:
+        preset_parts = []
+        for v in matching_variants:
+            sid = v["id"].replace("'", "\\'")
+            sprice = v["price"].replace("'", "\\'")
+            label = v["size"].replace(" in.", "") + (f' — {v["price"]}' if v["price"] else "")
+            preset_parts.append(
+                f'<button class="preset-btn" onclick="selectProductSize(\'{sid}\',\'{sprice}\',{v["long"]},this)">'
+                f'{label}</button>'
+            )
+        preset_html = "\n    ".join(preset_parts)
+        cart_ui_html = (
+            '<button class="btn btn-cart" id="addToCartBtn" style="display:none;margin-top:10px;" onclick="addToCart()">'
+            'Add to Cart</button>\n'
+            '  <a class="btn btn-ghost" id="contactSizeBtn" href="https://kenhoehn.ca/contact" '
+            'target="_blank" rel="noopener" style="display:none;margin-top:6px;text-align:center;'
+            'text-decoration:none;">Contact Us for a Custom Size →</a>'
+        )
+    else:
+        preset_html = (
+            '<button class="preset-btn" onclick="applyPreset(24, this)">24"</button>\n'
+            '    <button class="preset-btn" onclick="applyPreset(36, this)">36"</button>\n'
+            '    <button class="preset-btn" onclick="applyPreset(48, this)">48"</button>\n'
+            '    <button class="preset-btn" onclick="applyPreset(60, this)">60"</button>\n'
+            '    <button class="preset-btn" onclick="applyPreset(72, this)">72"</button>'
+        )
+        cart_ui_html = ""
 
     # Panel label copy
     if is_vertical:
@@ -2064,6 +2168,9 @@ async def mockup_editor(
   .btn-primary {{ background: var(--accent); color: #fff; }}
   .btn-ghost   {{ background: var(--paper); color: var(--ink); border: 1px solid var(--border); }}
   .btn-sm      {{ padding: 7px 12px !important; font-size: 0.84rem !important; margin-top: 5px !important; }}
+  .btn-cart  {{ background: #0a3a14; color: #fff; border: none; width: 100%; }}
+  .btn-cart:hover {{ background: #061f0b; opacity: 1 !important; }}
+  .btn-cart:disabled {{ opacity: 0.6; cursor: not-allowed; }}
   .btn-danger  {{
     background: #fee2e2 !important; color: #991b1b !important;
     border: 1px solid #fca5a5 !important;
@@ -2140,12 +2247,9 @@ async def mockup_editor(
   </div>
 
   <div class="preset-row" id="presetRow">
-    <button class="preset-btn" onclick="applyPreset(24, this)">24"</button>
-    <button class="preset-btn" onclick="applyPreset(36, this)">36"</button>
-    <button class="preset-btn" onclick="applyPreset(48, this)">48"</button>
-    <button class="preset-btn" onclick="applyPreset(60, this)">60"</button>
-    <button class="preset-btn" onclick="applyPreset(72, this)">72"</button>
+    {preset_html}
   </div>
+  {cart_ui_html}
 
   <div class="tip" id="sizeTip">
     {size_tip_body}
@@ -2202,6 +2306,8 @@ async def mockup_editor(
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────
+const VARIANTS         = {variants_js};
+const HAS_PRODUCT_SIZES = {'true' if has_product_sizes else 'false'};
 const ROOM_B64         = "{room_b64}";
 const ROOM_MIME        = "{room_mime}";
 const FIRST_ART_B64    = "{art_b64}";
@@ -2897,6 +3003,81 @@ function sendEmail() {{
     </div>
   </div>
 </div>
+<script>
+// ── Product size selection & Add to Cart ──────────────────────────────────
+let selectedVariantId = null;
+let selectedVariantPrice = '';
+
+function selectProductSize(variantId, price, longEdge, btn) {{
+  selectedVariantId = variantId;
+  selectedVariantPrice = price;
+  applyPreset(longEdge, btn);
+  updateCartUI();
+}}
+
+function updateCartUI() {{
+  if (!HAS_PRODUCT_SIZES) return;
+  const cartBtn    = document.getElementById('addToCartBtn');
+  const contactBtn = document.getElementById('contactSizeBtn');
+  if (!cartBtn) return;
+  if (selectedVariantId) {{
+    cartBtn.textContent = 'Add to Cart' + (selectedVariantPrice ? ' — ' + selectedVariantPrice : '');
+    cartBtn.style.display = 'block';
+    if (contactBtn) contactBtn.style.display = 'none';
+  }} else {{
+    cartBtn.style.display = 'none';
+    if (contactBtn) contactBtn.style.display = 'block';
+  }}
+}}
+
+function addToCart() {{
+  if (!selectedVariantId) return;
+  const btn = document.getElementById('addToCartBtn');
+  btn.textContent = 'Adding…';
+  btn.disabled = true;
+  window.parent.postMessage({{
+    action: 'wallymock_addToCart',
+    variantId: selectedVariantId
+  }}, 'https://kenhoehn.ca');
+}}
+
+window.addEventListener('message', function(e) {{
+  if (e.origin !== 'https://kenhoehn.ca') return;
+  const btn = document.getElementById('addToCartBtn');
+  if (!btn || !e.data) return;
+  if (e.data.action === 'wallymock_cartSuccess') {{
+    btn.textContent = 'Added! View Cart →';
+    btn.disabled = false;
+    btn.onclick = function() {{ window.parent.location.href = '/checkout'; }};
+  }} else if (e.data.action === 'wallymock_cartError') {{
+    btn.textContent = 'Could not add to cart — try again';
+    btn.disabled = false;
+    btn.onclick = addToCart;
+  }}
+}});
+
+if (HAS_PRODUCT_SIZES) {{
+  const _origOnSizeInput = onSizeInput;
+  onSizeInput = function(val) {{
+    _origOnSizeInput(val);
+    const num = parseFloat(val);
+    if (!isNaN(num) && num > 0) {{
+      const match = VARIANTS.find(v => Math.abs(v.long - num) <= 0.5);
+      if (match) {{
+        selectedVariantId = match.id;
+        selectedVariantPrice = match.price;
+      }} else {{
+        selectedVariantId = null;
+        selectedVariantPrice = '';
+      }}
+    }} else {{
+      selectedVariantId = null;
+      selectedVariantPrice = '';
+    }}
+    updateCartUI();
+  }};
+}}
+</script>
 </body>
 </html>"""
     return HTMLResponse(content=html)
