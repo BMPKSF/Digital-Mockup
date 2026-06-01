@@ -507,7 +507,40 @@ function updateMeasLabel() {
   checkStep1Complete();
 }
 
-document.getElementById('mainForm').addEventListener('submit', e => {
+function replaceFile(input, file) {
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  input.files = dt.files;
+}
+
+async function compressImage(file, maxDim = 2000, quality = 0.88) {
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.naturalWidth, h = img.naturalHeight;
+        if (Math.max(w, h) > maxDim) {
+          if (w >= h) { h = Math.round(h * maxDim / w); w = maxDim; }
+          else        { w = Math.round(w * maxDim / h); h = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        canvas.toBlob(blob => {
+          resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }));
+        }, 'image/jpeg', quality);
+      };
+      img.onerror = () => resolve(file);
+      img.src = e.target.result;
+    };
+    reader.onerror = () => resolve(file);
+    reader.readAsDataURL(file);
+  });
+}
+
+document.getElementById('mainForm').addEventListener('submit', async e => {
+  e.preventDefault();
   const roomEl = document.getElementById('roomFile');
   const artEl  = document.getElementById('artFile');
   const measEl = document.getElementById('wallMeasInput');
@@ -518,7 +551,6 @@ document.getElementById('mainForm').addEventListener('submit', e => {
     [measEl, measEl.value.trim() === ''],
   ].filter(([, bad]) => bad).map(([el]) => el);
   if (!orientOk || missing.length) {
-    e.preventDefault();
     if (!orientOk) {
       document.querySelector('.orient-row').style.outline = '2px solid #c8440a';
       document.querySelector('.orient-row').style.borderRadius = '10px';
@@ -532,8 +564,22 @@ document.getElementById('mainForm').addEventListener('submit', e => {
     return;
   }
   const btn = document.getElementById('submitBtn');
-  btn.innerHTML = '<span class="btn-spinner"></span>Uploading…';
+  const THRESHOLD = 4 * 1024 * 1024;
+  const roomFile = roomEl.files[0];
+  const artFile  = artEl.files[0];
+  const needsCompression = roomFile.size > THRESHOLD || artFile.size > THRESHOLD;
+  btn.innerHTML = needsCompression ? '<span class="btn-spinner"></span>Compressing…' : '<span class="btn-spinner"></span>Uploading…';
   btn.disabled = true;
+  if (needsCompression) {
+    const [cRoom, cArt] = await Promise.all([
+      roomFile.size > THRESHOLD ? compressImage(roomFile) : Promise.resolve(roomFile),
+      artFile.size  > THRESHOLD ? compressImage(artFile)  : Promise.resolve(artFile),
+    ]);
+    replaceFile(roomEl, cRoom);
+    replaceFile(artEl,  cArt);
+    btn.innerHTML = '<span class="btn-spinner"></span>Uploading…';
+  }
+  document.getElementById('mainForm').submit();
 });
 
 ['orH','orV'].forEach(id => {
@@ -769,7 +815,40 @@ function previewFile(input, containerId) {{
   reader.readAsDataURL(file);
 }}
 
-document.getElementById('mainForm').addEventListener('submit', e => {{
+function replaceFile(input, file) {{
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  input.files = dt.files;
+}}
+
+async function compressImage(file, maxDim = 2000, quality = 0.88) {{
+  return new Promise(resolve => {{
+    const reader = new FileReader();
+    reader.onload = e => {{
+      const img = new Image();
+      img.onload = () => {{
+        let w = img.naturalWidth, h = img.naturalHeight;
+        if (Math.max(w, h) > maxDim) {{
+          if (w >= h) {{ h = Math.round(h * maxDim / w); w = maxDim; }}
+          else        {{ w = Math.round(w * maxDim / h); h = maxDim; }}
+        }}
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        canvas.toBlob(blob => {{
+          resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {{ type: 'image/jpeg' }}));
+        }}, 'image/jpeg', quality);
+      }};
+      img.onerror = () => resolve(file);
+      img.src = e.target.result;
+    }};
+    reader.onerror = () => resolve(file);
+    reader.readAsDataURL(file);
+  }});
+}}
+
+document.getElementById('mainForm').addEventListener('submit', async e => {{
+  e.preventDefault();
   const roomEl   = document.getElementById('roomFile');
   const measEl   = document.getElementById('wallMeasInput');
   const orientOk = document.getElementById('orH').checked || document.getElementById('orV').checked;
@@ -778,7 +857,6 @@ document.getElementById('mainForm').addEventListener('submit', e => {{
     [measEl, measEl.value.trim() === ''],
   ].filter(([, bad]) => bad).map(([el]) => el);
   if (!orientOk || missing.length) {{
-    e.preventDefault();
     if (!orientOk) {{
       document.querySelector('.orient-row').style.outline = '2px solid #c8440a';
       document.querySelector('.orient-row').style.borderRadius = '10px';
@@ -792,8 +870,17 @@ document.getElementById('mainForm').addEventListener('submit', e => {{
     return;
   }}
   const btn = document.getElementById('submitBtn');
-  btn.innerHTML = '<span class="btn-spinner"></span>Uploading…';
+  const THRESHOLD = 4 * 1024 * 1024;
+  const roomFile = roomEl.files[0];
+  const needsCompression = roomFile.size > THRESHOLD;
+  btn.innerHTML = needsCompression ? '<span class="btn-spinner"></span>Compressing…' : '<span class="btn-spinner"></span>Uploading…';
   btn.disabled = true;
+  if (needsCompression) {{
+    const cRoom = await compressImage(roomFile);
+    replaceFile(roomEl, cRoom);
+    btn.innerHTML = '<span class="btn-spinner"></span>Uploading…';
+  }}
+  document.getElementById('mainForm').submit();
 }});
 
 ['orH','orV'].forEach(id => {{
