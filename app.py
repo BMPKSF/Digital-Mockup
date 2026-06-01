@@ -620,10 +620,19 @@ def _fetch_variants(ref: str) -> str:
         req = urllib.request.Request(url, headers={"User-Agent": "WallyMock/1.0"})
         with urllib.request.urlopen(req, timeout=8) as resp:
             data = json.loads(resp.read(2 * 1024 * 1024))
-    except Exception:
+    except Exception as e:
+        logging.warning("_fetch_variants failed for %s: %s", ref, e)
         return "[]"
+    # Try multiple JSON paths Squarespace uses for variants
+    raw = (
+        data.get("variants")
+        or data.get("item", {}).get("variants")
+        or data.get("item", {}).get("structuredContent", {}).get("variants")
+        or []
+    )
+    logging.info("_fetch_variants %s: top-level keys=%s raw_count=%d", ref, list(data.keys()), len(raw))
     variants = []
-    for v in data.get("variants", []):
+    for v in raw:
         attrs = v.get("attributes", {})
         if attrs.get("Frame", "").lower() != "unframed":
             continue
