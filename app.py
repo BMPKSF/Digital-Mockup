@@ -3058,7 +3058,7 @@ function updateOrderUI() {{
 
 function orderPrint() {{
   if (!selectedVariantId || !_REF) return;
-  window.parent.location.href = _REF + '?variant=' + encodeURIComponent(selectedVariantId);
+  window.parent.location.href = 'https://kenhoehn.ca' + _REF + '?variant=' + encodeURIComponent(selectedVariantId);
 }}
 
 if (HAS_PRODUCT_SIZES) {{
