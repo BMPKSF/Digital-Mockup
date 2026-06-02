@@ -1085,6 +1085,7 @@ def _build_restart_html(
 </style>
 </head>
 <body>
+{_back_btn(ref)}
 <div class="card">
   <div class="logo">WallyMock<sup style="font-size:0.45em;vertical-align:super;letter-spacing:0;">TM</sup></div>
   <p class="card-sub">Step 1 of 4 — Review &amp; continue</p>
