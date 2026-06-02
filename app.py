@@ -631,6 +631,7 @@ def _fetch_variants(ref: str) -> str:
         or []
     )
     logging.info("_fetch_variants %s: top-level keys=%s raw_count=%d", ref, list(data.keys()), len(raw))
+    item_id = data.get("item", {}).get("id", "")
     variants = []
     for v in raw:
         attrs = v.get("attributes", {})
@@ -668,6 +669,8 @@ def _fetch_variants(ref: str) -> str:
                 continue
         variants.append({
             "id": v.get("id", ""),
+            "sku": v.get("sku", ""),
+            "itemId": item_id,
             "size": size_str,
             "w": w,
             "h": h,
@@ -2001,8 +2004,8 @@ async def mockup_editor(
             )
         preset_html = "\n    ".join(preset_parts)
         cart_ui_html = (
-            '<button class="btn btn-cart" id="orderBtn" style="display:none;margin-top:10px;" onclick="orderPrint()">'
-            'Order This Print \u2192</button>\n'
+            '<button class="btn btn-cart" id="addToCartBtn" style="display:none;margin-top:10px;" onclick="addToCart()">'
+            'Add to Cart</button>\n'
             '  <a class="btn btn-ghost" id="contactSizeBtn" href="https://kenhoehn.ca/contact" '
             'target="_blank" rel="noopener" style="display:none;margin-top:6px;text-align:center;'
             'text-decoration:none;">Contact Us for a Custom Size \u2192</a>'
@@ -3029,37 +3032,60 @@ function sendEmail() {{
   </div>
 </div>
 <script>
-// ── Product size selection & Order ────────────────────────────────────────
+// ── Product size selection & Add to Cart ──────────────────────────────────
 let selectedVariantId = null;
 let selectedVariantPrice = '';
-const _REF = {json.dumps(ref)};
 
 function selectProductSize(variantId, price, longEdge, btn) {{
   selectedVariantId = variantId;
   selectedVariantPrice = price;
   applyPreset(longEdge, btn);
-  updateOrderUI();
+  updateCartUI();
 }}
 
-function updateOrderUI() {{
+function updateCartUI() {{
   if (!HAS_PRODUCT_SIZES) return;
-  const orderBtn   = document.getElementById('orderBtn');
+  const cartBtn    = document.getElementById('addToCartBtn');
   const contactBtn = document.getElementById('contactSizeBtn');
-  if (!orderBtn) return;
+  if (!cartBtn) return;
   if (selectedVariantId) {{
-    orderBtn.textContent = 'Order This Print \u2192' + (selectedVariantPrice ? ' \u2014 ' + selectedVariantPrice : '');
-    orderBtn.style.display = 'block';
+    cartBtn.textContent = 'Add to Cart' + (selectedVariantPrice ? ' \u2014 ' + selectedVariantPrice : '');
+    cartBtn.style.display = 'block';
     if (contactBtn) contactBtn.style.display = 'none';
   }} else {{
-    orderBtn.style.display = 'none';
+    cartBtn.style.display = 'none';
     if (contactBtn) contactBtn.style.display = 'block';
   }}
 }}
 
-function orderPrint() {{
-  if (!selectedVariantId || !_REF) return;
-  window.parent.location.href = 'https://kenhoehn.ca' + _REF + '?variant=' + encodeURIComponent(selectedVariantId);
+function addToCart() {{
+  if (!selectedVariantId) return;
+  const v = VARIANTS.find(x => x.id === selectedVariantId);
+  if (!v || !v.sku || !v.itemId) return;
+  const btn = document.getElementById('addToCartBtn');
+  btn.textContent = 'Adding\u2026';
+  btn.disabled = true;
+  window.parent.postMessage({{
+    action: 'wallymock_addToCart',
+    sku: v.sku,
+    itemId: v.itemId
+  }}, 'https://kenhoehn.ca');
 }}
+
+window.addEventListener('message', function(e) {{
+  if (e.origin !== 'https://kenhoehn.ca') return;
+  const btn = document.getElementById('addToCartBtn');
+  if (!btn || !e.data) return;
+  if (e.data.action === 'wallymock_cartSuccess') {{
+    btn.textContent = 'Added! \u2714';
+    btn.disabled = false;
+    btn.onclick = function() {{ window.parent.location.href = 'https://kenhoehn.ca/cart'; }};
+  }} else if (e.data.action === 'wallymock_cartError') {{
+    btn.textContent = 'Could not add to cart \u2014 try again';
+    btn.disabled = false;
+    btn.onclick = addToCart;
+  }}
+}});
 
 if (HAS_PRODUCT_SIZES) {{
   const _origOnSizeInput = onSizeInput;
@@ -3079,7 +3105,7 @@ if (HAS_PRODUCT_SIZES) {{
       selectedVariantId = null;
       selectedVariantPrice = '';
     }}
-    updateOrderUI();
+    updateCartUI();
   }};
 }}
 </script>
