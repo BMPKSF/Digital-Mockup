@@ -2071,6 +2071,13 @@ async def mockup_editor(
                 continue
         matching_variants.append(v)
 
+    # If any null-aspect variants matched (e.g. Oval), show only those —
+    # they were included because of a specific thumbnail/frame match,
+    # so numeric-aspect variants from the same product shouldn't bleed in.
+    null_aspect = [v for v in matching_variants if v.get("aspect") is None]
+    if null_aspect:
+        matching_variants = null_aspect
+
     has_product_sizes = bool(matching_variants)
     variants_js = json.dumps(matching_variants)
 
