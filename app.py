@@ -691,9 +691,17 @@ def _fetch_variants(ref: str) -> str:
                 w, h = long_edge, short_edge
                 orientation = None
             else:
-                # Unknown format — skip but log so we can add support later
-                logging.warning("_fetch_variants: unrecognised size format %r attrs=%r", size_str, attrs)
-                continue
+                # Non-numeric aspect ratio (e.g. "Oval Aspect") — store with null aspect
+                m2 = re.match(r"(\d+(?:\.\d+)?)\s*in\.", size_str, re.IGNORECASE)
+                if m2:
+                    long_edge = float(m2.group(1))
+                    w, h = long_edge, long_edge
+                    short_edge = long_edge
+                    aspect = None
+                    orientation = None
+                else:
+                    logging.warning("_fetch_variants: unrecognised size format %r attrs=%r", size_str, attrs)
+                    continue
         variants.append({
             "id": v.get("id", ""),
             "sku": v.get("sku", ""),
@@ -2053,9 +2061,14 @@ async def mockup_editor(
                 continue
         if v.get("orientation") is not None and v["orientation"] != orientation_filter:
             continue
-        v_aspect = v.get("aspect", 1.0)
-        if abs(v_aspect - art_aspect_norm) / max(art_aspect_norm, 0.001) > 0.07:
-            continue
+        v_aspect = v.get("aspect")
+        if v_aspect is None:
+            # Non-numeric aspect ratio (e.g. Oval) — only include when user clicked a specific thumbnail
+            if not frame:
+                continue
+        else:
+            if abs(v_aspect - art_aspect_norm) / max(art_aspect_norm, 0.001) > 0.07:
+                continue
         matching_variants.append(v)
 
     has_product_sizes = bool(matching_variants)
