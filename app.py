@@ -2030,7 +2030,9 @@ async def mockup_editor(
             )
         preset_html = "\n    ".join(preset_parts)
         cart_ui_html = (
-            '<button class="btn btn-cart" id="addToCartBtn" style="display:none;margin-top:10px;" onclick="addToCart()">'
+            '<p style="font-size:0.78rem;color:#888;font-style:italic;margin:8px 0 2px;">'
+            'Prices shown are for unframed prints. To order a framed print, visit the product page.</p>\n'
+            '  <button class="btn btn-cart" id="addToCartBtn" style="display:none;margin-top:6px;" onclick="addToCart()">'
             'Add to Cart</button>\n'
             '  <a class="btn btn-ghost" id="contactSizeBtn" href="https://kenhoehn.ca/contact" '
             'target="_blank" rel="noopener" style="display:none;margin-top:6px;text-align:center;'
