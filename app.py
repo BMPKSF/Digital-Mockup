@@ -991,6 +991,7 @@ def _build_restart_html(
     orientation: str,
     room_thumb_b64: str,
     art_thumb_b64: str,
+    ref: str = "",
 ) -> str:
     """Return Step-1 HTML with both images pre-loaded from the store."""
     orient_h_checked = "checked" if orientation == "H" else ""
@@ -1111,6 +1112,7 @@ def _build_restart_html(
   <form action="/mockup/picker_restart" enctype="multipart/form-data" method="post" id="restartForm">
     <input type="hidden" name="room_id" id="roomIdField" value="{room_id}">
     <input type="hidden" name="art_id"  value="{art_id}">
+    <input type="hidden" name="ref"     value="{html_mod.escape(ref)}">
     <input type="file" id="newRoomFile" name="room_file" accept="image/*"
            style="display:none" onchange="onNewRoom(this)">
 
@@ -1191,6 +1193,7 @@ async def mockup_restart(
     art_id:           str   = Query(...),
     wall_measurement: float = Query(...),
     orientation:      str   = Query("H"),
+    ref:              str   = Query(""),
 ) -> HTMLResponse:
     """Re-render step 1 with both images pre-loaded (used by all back-to-start links)."""
     orientation = orientation.strip().upper()
@@ -1217,7 +1220,7 @@ async def mockup_restart(
     art_thumb_b64 = base64.b64encode(art_buf.getvalue()).decode("utf-8")
 
     return HTMLResponse(content=_build_restart_html(
-        room_id, art_id, wall_measurement, orientation, room_thumb_b64, art_thumb_b64
+        room_id, art_id, wall_measurement, orientation, room_thumb_b64, art_thumb_b64, ref
     ))
 
 
@@ -1228,6 +1231,7 @@ async def mockup_picker_restart(
     orientation:      str                    = Form("H"),
     room_id:          str                    = Form(""),
     room_file:        UploadFile | None      = File(None),
+    ref:              str                    = Form(""),
 ) -> HTMLResponse:
     """Accept stored image IDs from the restart page; optionally replace the room photo."""
     orientation = orientation.strip().upper()
@@ -1241,7 +1245,8 @@ async def mockup_picker_restart(
         room_id = _save_image(_to_jpeg(room_pil), "image/jpeg")
     else:
         _load_image(room_id)
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation))
+    variants_json = _fetch_variants(ref)
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json))
 
 
 @app.get("/mockup/prefill", response_class=HTMLResponse)
@@ -1313,6 +1318,7 @@ def _build_picker_html(
         f"&art_id={urllib.parse.quote(art_id)}"
         f"&wall_measurement={wall_measurement}"
         f"&orientation={orientation}"
+        + (f"&ref={urllib.parse.quote(ref)}" if ref else "")
     )
 
     if is_vertical:
@@ -1891,6 +1897,7 @@ async def mockup_picker_get(
     art_id:           str   = Query(...),
     wall_measurement: float = Query(...),
     orientation:      str   = Query("H"),
+    ref:              str   = Query(""),
 ) -> HTMLResponse:
     """Re-render the picker from stored images (used by 'Re-mark Wall' back-link)."""
     orientation = orientation.strip().upper()
@@ -1898,7 +1905,8 @@ async def mockup_picker_get(
         orientation = "H"
     if not (1 <= wall_measurement <= 9999):
         raise HTTPException(400, "Invalid measurement.")
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation))
+    variants_json = _fetch_variants(ref)
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json))
 
 
 @app.post("/mockup/picker_prefill", response_class=HTMLResponse)
@@ -2061,6 +2069,7 @@ async def mockup_editor(
         f"&art_id={urllib.parse.quote(art_id)}"
         f"&wall_measurement={wall_measurement}"
         f"&orientation={orientation}"
+        + (f"&ref={urllib.parse.quote(ref)}" if ref else "")
     )
 
     restart_url = (
@@ -2068,6 +2077,7 @@ async def mockup_editor(
         f"&art_id={urllib.parse.quote(art_id)}"
         f"&wall_measurement={wall_measurement}"
         f"&orientation={orientation}"
+        + (f"&ref={urllib.parse.quote(ref)}" if ref else "")
     )
 
     html = f"""<!DOCTYPE html>
