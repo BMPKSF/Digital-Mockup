@@ -611,6 +611,22 @@ document.getElementById('wallMeasInput').addEventListener('input', checkStep1Com
 </html>""")
 
 
+def _back_btn(ref: str) -> str:
+    """Fixed top-left 'Back to Artwork' button, only rendered when ref is set."""
+    if not ref:
+        return ""
+    url = html_mod.escape("https://kenhoehn.ca" + ref)
+    return (
+        f'<a href="{url}" '
+        'style="position:fixed;top:12px;left:12px;z-index:9999;background:#fff;'
+        'border:1px solid #d8d4cc;border-radius:6px;padding:8px 14px;font-size:0.88rem;'
+        'text-decoration:none;color:#222;font-weight:500;'
+        'box-shadow:0 1px 4px rgba(0,0,0,.12);" '
+        'onclick="event.preventDefault();window.parent.location.href=this.href;">'
+        '\u2190 Back to Artwork</a>'
+    )
+
+
 def _fetch_variants(ref: str) -> str:
     """Fetch Squarespace product JSON and return filtered Unframed variants as a JSON string."""
     if not ref or not ref.startswith("/"):
@@ -791,6 +807,7 @@ def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants
 </style>
 </head>
 <body>
+{_back_btn(ref)}
 <div class="card">
   <div class="logo">WallyMock<sup style="font-size:0.45em;vertical-align:super;letter-spacing:0;">TM</sup></div>
   <p class="card-sub">Step 1 of 4 — Upload &amp; configure</p>
@@ -1455,7 +1472,7 @@ def _build_picker_html(
 </style>
 </head>
 <body>
-
+{_back_btn(ref)}
 <h1 class="page-title">Step 2 — Mark Your Measurement</h1>
 <p class="page-sub">Click two points on the photo that span your {wall_measurement}" measurement</p>
 
@@ -2250,7 +2267,7 @@ async def mockup_editor(
 </style>
 </head>
 <body>
-
+{_back_btn(ref)}
 <!-- ═══ Stage ═══ -->
 <div class="stage" id="stage">
   <canvas id="mainCanvas"></canvas>
@@ -2324,7 +2341,6 @@ async def mockup_editor(
      text-align:center;margin-top:8px;">← Re-mark Wall</a>
   <a href="{restart_url}" class="btn btn-ghost" style="text-decoration:none;display:block;
      text-align:center;margin-top:4px;font-size:0.85rem;">← Back to Step 1</a>
-  {'<a href="https://kenhoehn.ca' + ref + '" class="btn btn-ghost" style="text-decoration:none;display:block;text-align:center;margin-top:4px;font-size:0.85rem;" onclick="window.parent.location.href=this.href;return false;">← Back to Artwork</a>' if ref else ''}
 
   <p class="hint">
     • Click a print in the list — or on the canvas — to select it.<br>
