@@ -627,8 +627,19 @@ def _back_btn(ref: str) -> str:
     )
 
 
+def _img_key(url: str) -> str:
+    """Extract Squarespace CDN image key from a URL (second-to-last path segment)."""
+    if not url:
+        return ""
+    try:
+        parts = [p for p in urllib.parse.urlparse(url).path.split("/") if p]
+        return parts[-2] if len(parts) >= 2 else ""
+    except Exception:
+        return ""
+
+
 def _fetch_variants(ref: str) -> str:
-    """Fetch Squarespace product JSON and return filtered Unframed variants as a JSON string."""
+    """Fetch Squarespace product JSON and return all variants as a JSON string."""
     if not ref or not ref.startswith("/"):
         return "[]"
     try:
@@ -651,9 +662,9 @@ def _fetch_variants(ref: str) -> str:
     variants = []
     for v in raw:
         attrs = v.get("attributes", {})
-        if attrs.get("Frame", "").lower() != "unframed":
-            continue
         size_str = attrs.get("Size", "")
+        frame = attrs.get("Frame", "")
+        image_key = _img_key(v.get("mainImage", {}).get("assetUrl", ""))
         price_val = v.get("priceMoney", {}).get("value", "")
         try:
             price_str = f"CA${float(price_val):,.0f}" if price_val else ""
@@ -694,13 +705,15 @@ def _fetch_variants(ref: str) -> str:
             "price": price_str,
             "aspect": aspect,
             "long": long_edge,
+            "frame": frame,
+            "imageKey": image_key,
         })
     return json.dumps(variants)
 
 
 # ── Step 1b — Prefill flow (artwork supplied via URL) ─────────────────────────
 
-def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants_json: str = "[]") -> str:
+def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants_json: str = "[]", frame: str = "") -> str:
     """Return Step-1 HTML with artwork pre-loaded; client only supplies room + measurement."""
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -824,6 +837,7 @@ def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants
     <input type="hidden" name="art_id" value="{art_id}">
     <input type="hidden" name="ref" value="{html_mod.escape(ref)}">
     <input type="hidden" name="variants_json" value="{html_mod.escape(variants_json)}">
+    <input type="hidden" name="frame" value="{html_mod.escape(frame)}">
 
     <label class="field-label" for="roomFile">Room / Wall Photo</label>
     <input type="file" name="room_file" id="roomFile" accept="image/*"
@@ -992,6 +1006,7 @@ def _build_restart_html(
     room_thumb_b64: str,
     art_thumb_b64: str,
     ref: str = "",
+    frame: str = "",
 ) -> str:
     """Return Step-1 HTML with both images pre-loaded from the store."""
     orient_h_checked = "checked" if orientation == "H" else ""
@@ -1114,6 +1129,7 @@ def _build_restart_html(
     <input type="hidden" name="room_id" id="roomIdField" value="{room_id}">
     <input type="hidden" name="art_id"  value="{art_id}">
     <input type="hidden" name="ref"     value="{html_mod.escape(ref)}">
+    <input type="hidden" name="frame"   value="{html_mod.escape(frame)}">
     <input type="file" id="newRoomFile" name="room_file" accept="image/*"
            style="display:none" onchange="onNewRoom(this)">
 
@@ -1195,6 +1211,7 @@ async def mockup_restart(
     wall_measurement: float = Query(...),
     orientation:      str   = Query("H"),
     ref:              str   = Query(""),
+    frame:            str   = Query(""),
 ) -> HTMLResponse:
     """Re-render step 1 with both images pre-loaded (used by all back-to-start links)."""
     orientation = orientation.strip().upper()
@@ -1221,7 +1238,7 @@ async def mockup_restart(
     art_thumb_b64 = base64.b64encode(art_buf.getvalue()).decode("utf-8")
 
     return HTMLResponse(content=_build_restart_html(
-        room_id, art_id, wall_measurement, orientation, room_thumb_b64, art_thumb_b64, ref
+        room_id, art_id, wall_measurement, orientation, room_thumb_b64, art_thumb_b64, ref, frame
     ))
 
 
@@ -1233,6 +1250,7 @@ async def mockup_picker_restart(
     room_id:          str                    = Form(""),
     room_file:        UploadFile | None      = File(None),
     ref:              str                    = Form(""),
+    frame:            str                    = Form(""),
 ) -> HTMLResponse:
     """Accept stored image IDs from the restart page; optionally replace the room photo."""
     orientation = orientation.strip().upper()
@@ -1247,11 +1265,11 @@ async def mockup_picker_restart(
     else:
         _load_image(room_id)
     variants_json = _fetch_variants(ref)
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json))
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame))
 
 
 @app.get("/mockup/prefill", response_class=HTMLResponse)
-async def mockup_prefill(art_url: str = Query(...), ref: str = Query("")) -> HTMLResponse:
+async def mockup_prefill(art_url: str = Query(...), ref: str = Query(""), frame: str = Query("")) -> HTMLResponse:
     """Fetch artwork from a URL, store it, return a pre-populated Step-1 page."""
     parsed = urllib.parse.urlparse(art_url)
     if parsed.scheme not in ("http", "https"):
@@ -1288,7 +1306,7 @@ async def mockup_prefill(art_url: str = Query(...), ref: str = Query("")) -> HTM
     art_thumb_b64 = base64.b64encode(thumb_buf.getvalue()).decode("utf-8")
 
     variants_json = _fetch_variants(ref)
-    return HTMLResponse(content=_build_prefill_html(art_id, art_thumb_b64, ref, variants_json))
+    return HTMLResponse(content=_build_prefill_html(art_id, art_thumb_b64, ref, variants_json, frame))
 
 
 # ── Shared picker-page builder ────────────────────────────────────────────────
@@ -1300,6 +1318,7 @@ def _build_picker_html(
     orientation: str,
     ref: str = "",
     variants_json: str = "[]",
+    frame: str = "",
 ) -> str:
     """Return the full Step-2 picker HTML string."""
     room_data, _ = _load_image(room_id)
@@ -1320,6 +1339,7 @@ def _build_picker_html(
         f"&wall_measurement={wall_measurement}"
         f"&orientation={orientation}"
         + (f"&ref={urllib.parse.quote(ref)}" if ref else "")
+        + (f"&frame={urllib.parse.quote(frame)}" if frame else "")
     )
 
     if is_vertical:
@@ -1544,6 +1564,7 @@ def _build_picker_html(
   <input type="hidden" name="orientation"      value="{orientation}">
   <input type="hidden" name="ref"              value="{html_mod.escape(ref)}">
   <input type="hidden" name="variants_json"    value="{html_mod.escape(variants_json)}">
+  <input type="hidden" name="frame"            value="{html_mod.escape(frame)}">
   <input type="hidden" name="pt1_x"            id="fPt1x">
   <input type="hidden" name="pt1_y"            id="fPt1y">
   <input type="hidden" name="pt2_x"            id="fPt2x">
@@ -1899,6 +1920,7 @@ async def mockup_picker_get(
     wall_measurement: float = Query(...),
     orientation:      str   = Query("H"),
     ref:              str   = Query(""),
+    frame:            str   = Query(""),
 ) -> HTMLResponse:
     """Re-render the picker from stored images (used by 'Re-mark Wall' back-link)."""
     orientation = orientation.strip().upper()
@@ -1907,7 +1929,7 @@ async def mockup_picker_get(
     if not (1 <= wall_measurement <= 9999):
         raise HTTPException(400, "Invalid measurement.")
     variants_json = _fetch_variants(ref)
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json))
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame))
 
 
 @app.post("/mockup/picker_prefill", response_class=HTMLResponse)
@@ -1918,6 +1940,7 @@ async def mockup_picker_prefill(
     orientation:      str        = Form("H"),
     ref:              str        = Form(""),
     variants_json:    str        = Form("[]"),
+    frame:            str        = Form(""),
 ) -> HTMLResponse:
     """Prefill variant: artwork already stored; only room file is uploaded here."""
     if not (1 <= wall_measurement <= 9999):
@@ -1934,7 +1957,7 @@ async def mockup_picker_prefill(
     room_bytes = _to_jpeg(room_pil)
     room_id = _save_image(room_bytes, "image/jpeg")
 
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json))
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame))
 
 
 # ── Step 3 — Interactive Editor ───────────────────────────────────────────────
@@ -1951,6 +1974,7 @@ async def mockup_editor(
     pt2_y:            float = Form(...),
     ref:              str   = Form(""),
     variants_json:    str   = Form("[]"),
+    frame:            str   = Form(""),
 ) -> HTMLResponse:
     orientation = orientation.strip().upper()
     if orientation not in ("H", "V"):
@@ -2008,6 +2032,14 @@ async def mockup_editor(
 
     matching_variants = []
     for v in variants_list:
+        # Frame filter: exact match when frame provided, fallback to Unframed-only
+        v_frame = v.get("frame", "").lower()
+        if frame:
+            if v_frame != frame.lower():
+                continue
+        else:
+            if v_frame != "unframed":
+                continue
         if v.get("orientation") is not None and v["orientation"] != orientation_filter:
             continue
         v_aspect = v.get("aspect", 1.0)
@@ -2029,10 +2061,13 @@ async def mockup_editor(
                 f'{label}</button>'
             )
         preset_html = "\n    ".join(preset_parts)
-        cart_ui_html = (
+        disclaimer_html = (
             '<p style="font-size:0.78rem;color:#888;font-style:italic;margin:8px 0 2px;">'
             'Prices shown are for unframed prints. To order a framed print, visit the product page.</p>\n'
-            '  <button class="btn btn-cart" id="addToCartBtn" style="display:none;margin-top:6px;" onclick="addToCart()">'
+        ) if not frame or frame.lower() == "unframed" else ""
+        cart_ui_html = (
+            disclaimer_html
+            + '  <button class="btn btn-cart" id="addToCartBtn" style="display:none;margin-top:6px;" onclick="addToCart()">'
             'Add to Cart</button>\n'
             '  <a class="btn btn-ghost" id="contactSizeBtn" href="https://kenhoehn.ca/contact" '
             'target="_blank" rel="noopener" style="display:none;margin-top:6px;text-align:center;'
@@ -2073,6 +2108,7 @@ async def mockup_editor(
         f"&wall_measurement={wall_measurement}"
         f"&orientation={orientation}"
         + (f"&ref={urllib.parse.quote(ref)}" if ref else "")
+        + (f"&frame={urllib.parse.quote(frame)}" if frame else "")
     )
 
     restart_url = (
@@ -2081,6 +2117,7 @@ async def mockup_editor(
         f"&wall_measurement={wall_measurement}"
         f"&orientation={orientation}"
         + (f"&ref={urllib.parse.quote(ref)}" if ref else "")
+        + (f"&frame={urllib.parse.quote(frame)}" if frame else "")
     )
 
     html = f"""<!DOCTYPE html>
