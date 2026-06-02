@@ -2324,6 +2324,7 @@ async def mockup_editor(
      text-align:center;margin-top:8px;">← Re-mark Wall</a>
   <a href="{restart_url}" class="btn btn-ghost" style="text-decoration:none;display:block;
      text-align:center;margin-top:4px;font-size:0.85rem;">← Back to Step 1</a>
+  {'<a href="https://kenhoehn.ca' + ref + '" class="btn btn-ghost" style="text-decoration:none;display:block;text-align:center;margin-top:4px;font-size:0.85rem;" onclick="window.parent.location.href=this.href;return false;">← Back to Artwork</a>' if ref else ''}
 
   <p class="hint">
     • Click a print in the list — or on the canvas — to select it.<br>
@@ -3077,7 +3078,7 @@ window.addEventListener('message', function(e) {{
   const btn = document.getElementById('addToCartBtn');
   if (!btn || !e.data) return;
   if (e.data.action === 'wallymock_cartSuccess') {{
-    btn.textContent = 'Added! \u2714';
+    btn.textContent = 'Added! \u2714 View Cart \u2192';
     btn.disabled = false;
     btn.onclick = function() {{ window.parent.location.href = 'https://kenhoehn.ca/cart'; }};
   }} else if (e.data.action === 'wallymock_cartError') {{
