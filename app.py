@@ -721,7 +721,7 @@ def _fetch_variants(ref: str) -> str:
 
 # ── Step 1b — Prefill flow (artwork supplied via URL) ─────────────────────────
 
-def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants_json: str = "[]", frame: str = "", coa_field: str = "") -> str:
+def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants_json: str = "[]", frame: str = "", coa_field: str = "", image_key: str = "") -> str:
     """Return Step-1 HTML with artwork pre-loaded; client only supplies room + measurement."""
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -847,6 +847,7 @@ def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants
     <input type="hidden" name="variants_json" value="{html_mod.escape(variants_json)}">
     <input type="hidden" name="frame" value="{html_mod.escape(frame)}">
     <input type="hidden" name="coa_field" value="{html_mod.escape(coa_field)}">
+    <input type="hidden" name="image_key" value="{html_mod.escape(image_key)}">
 
     <label class="field-label" for="roomFile">Room / Wall Photo</label>
     <input type="file" name="room_file" id="roomFile" accept="image/*"
@@ -1017,6 +1018,7 @@ def _build_restart_html(
     ref: str = "",
     frame: str = "",
     coa_field: str = "",
+    image_key: str = "",
 ) -> str:
     """Return Step-1 HTML with both images pre-loaded from the store."""
     orient_h_checked = "checked" if orientation == "H" else ""
@@ -1141,6 +1143,7 @@ def _build_restart_html(
     <input type="hidden" name="ref"       value="{html_mod.escape(ref)}">
     <input type="hidden" name="frame"     value="{html_mod.escape(frame)}">
     <input type="hidden" name="coa_field" value="{html_mod.escape(coa_field)}">
+    <input type="hidden" name="image_key" value="{html_mod.escape(image_key)}">
     <input type="file" id="newRoomFile" name="room_file" accept="image/*"
            style="display:none" onchange="onNewRoom(this)">
 
@@ -1224,6 +1227,7 @@ async def mockup_restart(
     ref:              str   = Query(""),
     frame:            str   = Query(""),
     coa_field:        str   = Query(""),
+    image_key:        str   = Query(""),
 ) -> HTMLResponse:
     """Re-render step 1 with both images pre-loaded (used by all back-to-start links)."""
     orientation = orientation.strip().upper()
@@ -1250,7 +1254,7 @@ async def mockup_restart(
     art_thumb_b64 = base64.b64encode(art_buf.getvalue()).decode("utf-8")
 
     return HTMLResponse(content=_build_restart_html(
-        room_id, art_id, wall_measurement, orientation, room_thumb_b64, art_thumb_b64, ref, frame, coa_field
+        room_id, art_id, wall_measurement, orientation, room_thumb_b64, art_thumb_b64, ref, frame, coa_field, image_key
     ))
 
 
@@ -1264,6 +1268,7 @@ async def mockup_picker_restart(
     ref:              str                    = Form(""),
     frame:            str                    = Form(""),
     coa_field:        str                    = Form(""),
+    image_key:        str                    = Form(""),
 ) -> HTMLResponse:
     """Accept stored image IDs from the restart page; optionally replace the room photo."""
     orientation = orientation.strip().upper()
@@ -1278,11 +1283,11 @@ async def mockup_picker_restart(
     else:
         _load_image(room_id)
     variants_json = _fetch_variants(ref)
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field))
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key))
 
 
 @app.get("/mockup/prefill", response_class=HTMLResponse)
-async def mockup_prefill(art_url: str = Query(...), ref: str = Query(""), frame: str = Query(""), coa_field: str = Query("")) -> HTMLResponse:
+async def mockup_prefill(art_url: str = Query(...), ref: str = Query(""), frame: str = Query(""), coa_field: str = Query(""), image_key: str = Query("")) -> HTMLResponse:
     """Fetch artwork from a URL, store it, return a pre-populated Step-1 page."""
     parsed = urllib.parse.urlparse(art_url)
     if parsed.scheme not in ("http", "https"):
@@ -1319,7 +1324,7 @@ async def mockup_prefill(art_url: str = Query(...), ref: str = Query(""), frame:
     art_thumb_b64 = base64.b64encode(thumb_buf.getvalue()).decode("utf-8")
 
     variants_json = _fetch_variants(ref)
-    return HTMLResponse(content=_build_prefill_html(art_id, art_thumb_b64, ref, variants_json, frame, coa_field))
+    return HTMLResponse(content=_build_prefill_html(art_id, art_thumb_b64, ref, variants_json, frame, coa_field, image_key))
 
 
 # ── Shared picker-page builder ────────────────────────────────────────────────
@@ -1333,6 +1338,7 @@ def _build_picker_html(
     variants_json: str = "[]",
     frame: str = "",
     coa_field: str = "",
+    image_key: str = "",
 ) -> str:
     """Return the full Step-2 picker HTML string."""
     room_data, _ = _load_image(room_id)
@@ -1355,6 +1361,7 @@ def _build_picker_html(
         + (f"&ref={urllib.parse.quote(ref)}" if ref else "")
         + (f"&frame={urllib.parse.quote(frame)}" if frame else "")
         + (f"&coa_field={urllib.parse.quote(coa_field)}" if coa_field else "")
+        + (f"&image_key={urllib.parse.quote(image_key)}" if image_key else "")
     )
 
     if is_vertical:
@@ -1581,6 +1588,7 @@ def _build_picker_html(
   <input type="hidden" name="variants_json"    value="{html_mod.escape(variants_json)}">
   <input type="hidden" name="frame"            value="{html_mod.escape(frame)}">
   <input type="hidden" name="coa_field"        value="{html_mod.escape(coa_field)}">
+  <input type="hidden" name="image_key"        value="{html_mod.escape(image_key)}">
   <input type="hidden" name="pt1_x"            id="fPt1x">
   <input type="hidden" name="pt1_y"            id="fPt1y">
   <input type="hidden" name="pt2_x"            id="fPt2x">
@@ -1938,6 +1946,7 @@ async def mockup_picker_get(
     ref:              str   = Query(""),
     frame:            str   = Query(""),
     coa_field:        str   = Query(""),
+    image_key:        str   = Query(""),
 ) -> HTMLResponse:
     """Re-render the picker from stored images (used by 'Re-mark Wall' back-link)."""
     orientation = orientation.strip().upper()
@@ -1946,7 +1955,7 @@ async def mockup_picker_get(
     if not (1 <= wall_measurement <= 9999):
         raise HTTPException(400, "Invalid measurement.")
     variants_json = _fetch_variants(ref)
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field))
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key))
 
 
 @app.post("/mockup/picker_prefill", response_class=HTMLResponse)
@@ -1959,6 +1968,7 @@ async def mockup_picker_prefill(
     variants_json:    str        = Form("[]"),
     frame:            str        = Form(""),
     coa_field:        str        = Form(""),
+    image_key:        str        = Form(""),
 ) -> HTMLResponse:
     """Prefill variant: artwork already stored; only room file is uploaded here."""
     if not (1 <= wall_measurement <= 9999):
@@ -1975,7 +1985,7 @@ async def mockup_picker_prefill(
     room_bytes = _to_jpeg(room_pil)
     room_id = _save_image(room_bytes, "image/jpeg")
 
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field))
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key))
 
 
 # ── Step 3 — Interactive Editor ───────────────────────────────────────────────
@@ -1994,6 +2004,7 @@ async def mockup_editor(
     variants_json:    str   = Form("[]"),
     frame:            str   = Form(""),
     coa_field:        str   = Form(""),
+    image_key:        str   = Form(""),
 ) -> HTMLResponse:
     orientation = orientation.strip().upper()
     if orientation not in ("H", "V"):
@@ -2049,34 +2060,29 @@ async def mockup_editor(
     orientation_filter = "Portrait" if is_vertical else "Landscape"
     art_aspect_norm = max(art_aspect, 1.0 / art_aspect) if art_aspect > 0 else 1.0
 
-    matching_variants = []
-    for v in variants_list:
-        # Frame filter: exact match when frame provided, fallback to Unframed-only
-        v_frame = v.get("frame", "").lower()
-        if frame:
-            if v_frame != frame.lower():
+    if image_key:
+        # Exact image key match — most precise, used when user clicked a specific thumbnail.
+        # Bypasses aspect ratio tolerance entirely; correct for framed images and non-standard shapes.
+        matching_variants = [v for v in variants_list if v.get("imageKey") == image_key]
+    else:
+        # Fallback: frame + orientation + aspect ratio matching
+        matching_variants = []
+        for v in variants_list:
+            v_frame = v.get("frame", "").lower()
+            if frame:
+                if v_frame != frame.lower():
+                    continue
+            else:
+                if v_frame != "unframed":
+                    continue
+            if v.get("orientation") is not None and v["orientation"] != orientation_filter:
                 continue
-        else:
-            if v_frame != "unframed":
-                continue
-        if v.get("orientation") is not None and v["orientation"] != orientation_filter:
-            continue
-        v_aspect = v.get("aspect")
-        if v_aspect is None:
-            # Non-numeric aspect ratio (e.g. Oval) — only include when user clicked a specific thumbnail
-            if not frame:
-                continue
-        else:
+            v_aspect = v.get("aspect")
+            if v_aspect is None:
+                continue  # skip non-numeric aspect variants when no image key available
             if abs(v_aspect - art_aspect_norm) / max(art_aspect_norm, 0.001) > 0.07:
                 continue
-        matching_variants.append(v)
-
-    # If any null-aspect variants matched (e.g. Oval), show only those —
-    # they were included because of a specific thumbnail/frame match,
-    # so numeric-aspect variants from the same product shouldn't bleed in.
-    null_aspect = [v for v in matching_variants if v.get("aspect") is None]
-    if null_aspect:
-        matching_variants = null_aspect
+            matching_variants.append(v)
 
     has_product_sizes = bool(matching_variants)
     variants_js = json.dumps(matching_variants)
@@ -2156,6 +2162,7 @@ async def mockup_editor(
         + (f"&ref={urllib.parse.quote(ref)}" if ref else "")
         + (f"&frame={urllib.parse.quote(frame)}" if frame else "")
         + (f"&coa_field={urllib.parse.quote(coa_field)}" if coa_field else "")
+        + (f"&image_key={urllib.parse.quote(image_key)}" if image_key else "")
     )
 
     restart_url = (
@@ -2166,6 +2173,7 @@ async def mockup_editor(
         + (f"&ref={urllib.parse.quote(ref)}" if ref else "")
         + (f"&frame={urllib.parse.quote(frame)}" if frame else "")
         + (f"&coa_field={urllib.parse.quote(coa_field)}" if coa_field else "")
+        + (f"&image_key={urllib.parse.quote(image_key)}" if image_key else "")
     )
 
     html = f"""<!DOCTYPE html>
