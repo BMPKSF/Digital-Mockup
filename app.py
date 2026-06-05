@@ -117,6 +117,13 @@ def detect_mime(pil_img: Image.Image) -> str:
 
 _MAX_DIM = 1800  # cap longest edge to keep base64 payloads small
 
+# Image keys for non-rectangular artwork that must be stored as PNG to preserve transparency.
+# Add new keys here whenever Ken adds a circle/oval/custom-shape product.
+_PNG_IMAGE_KEYS: set[str] = {
+    "7c8ac3e2-f61d-4c24-aa49-e842af9f55d6",  # oval
+}
+
+
 def _to_jpeg(pil_img: Image.Image, quality: int = 80) -> bytes:
     """Convert a PIL image to JPEG bytes, flattening any alpha channel onto white.
     Resizes so the longest edge is at most _MAX_DIM pixels."""
@@ -135,6 +142,24 @@ def _to_jpeg(pil_img: Image.Image, quality: int = 80) -> bytes:
             pil_img = pil_img.resize((round(w * _MAX_DIM / h), _MAX_DIM), Image.LANCZOS)
     buf = BytesIO()
     pil_img.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def _to_png(pil_img: Image.Image) -> bytes:
+    """Resize and save as PNG, preserving transparency for non-rectangular artwork."""
+    pil_img = ImageOps.exif_transpose(pil_img)
+    if pil_img.mode == "P":
+        pil_img = pil_img.convert("RGBA")
+    elif pil_img.mode not in ("RGBA", "RGB", "LA"):
+        pil_img = pil_img.convert("RGBA")
+    w, h = pil_img.size
+    if max(w, h) > _MAX_DIM:
+        if w >= h:
+            pil_img = pil_img.resize((_MAX_DIM, round(h * _MAX_DIM / w)), Image.LANCZOS)
+        else:
+            pil_img = pil_img.resize((round(w * _MAX_DIM / h), _MAX_DIM), Image.LANCZOS)
+    buf = BytesIO()
+    pil_img.save(buf, format="PNG")
     return buf.getvalue()
 
 
@@ -1313,14 +1338,21 @@ async def mockup_prefill(art_url: str = Query(...), ref: str = Query(""), frame:
         raise HTTPException(400, "The URL did not return a valid image file.")
 
     pil = Image.open(BytesIO(data))
-    art_bytes = _to_jpeg(pil)
-    art_id = _save_image(art_bytes, "image/jpeg")
+    if image_key in _PNG_IMAGE_KEYS:
+        art_bytes = _to_png(pil)
+        art_id = _save_image(art_bytes, "image/png")
+    else:
+        art_bytes = _to_jpeg(pil)
+        art_id = _save_image(art_bytes, "image/jpeg")
 
-    # Small thumbnail for the preview card
+    # Small thumbnail for the preview card (always JPEG for compact preview)
     thumb = Image.open(BytesIO(art_bytes))
     thumb.thumbnail((400, 220), Image.LANCZOS)
     thumb_buf = BytesIO()
-    thumb.save(thumb_buf, format="JPEG", quality=82)
+    if thumb.mode in ("RGBA", "LA"):
+        thumb.save(thumb_buf, format="PNG")
+    else:
+        thumb.save(thumb_buf, format="JPEG", quality=82)
     art_thumb_b64 = base64.b64encode(thumb_buf.getvalue()).decode("utf-8")
 
     variants_json = _fetch_variants(ref)
@@ -2799,12 +2831,21 @@ function _drawPiece(p, pieceIdx) {{
   // Shadow
   if (p.shadowOn) {{
     const sh=_getShadowOffset(p);
-    ctx.save(); ctx.filter=`blur(${{sh.blur.toFixed(1)}}px)`; ctx.fillStyle='rgba(0,0,0,0.52)';
+    ctx.save();
     if (hasWarp) {{
+      ctx.filter=`blur(${{sh.blur.toFixed(1)}}px)`; ctx.fillStyle='rgba(0,0,0,0.52)';
       ctx.beginPath();
       p.corners.forEach((c,i)=> i===0?ctx.moveTo(c.x+sh.x,c.y+sh.y):ctx.lineTo(c.x+sh.x,c.y+sh.y));
       ctx.closePath(); ctx.fill();
-    }} else {{ ctx.fillRect(p.artX+sh.x,p.artY+sh.y,p.artW,p.artH); }}
+    }} else {{
+      // Use canvas shadow API so transparent-PNG artwork (oval, circle, etc.)
+      // casts a shape-following shadow rather than a rectangular one.
+      ctx.shadowColor='rgba(0,0,0,0.52)';
+      ctx.shadowBlur=sh.blur;
+      ctx.shadowOffsetX=sh.x;
+      ctx.shadowOffsetY=sh.y;
+      ctx.drawImage(p.img,p.artX,p.artY,p.artW,p.artH);
+    }}
     ctx.restore();
   }}
 
