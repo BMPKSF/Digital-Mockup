@@ -121,6 +121,7 @@ _MAX_DIM = 1800  # cap longest edge to keep base64 payloads small
 # Add new keys here whenever Ken adds a circle/oval/custom-shape product.
 _PNG_IMAGE_KEYS: set[str] = {
     "7c8ac3e2-f61d-4c24-aa49-e842af9f55d6",  # oval
+    "e4e65e05-3a9b-47f2-835c-89dda531c9cb",  # non-rectangular
 }
 
 
