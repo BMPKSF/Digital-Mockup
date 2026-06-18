@@ -83,6 +83,58 @@ _RESEND_KEY  = os.environ.get("RESEND_API_KEY", "")
 
 logger = logging.getLogger("wallymock")
 
+# ── Supabase client ───────────────────────────────────────────────────────────
+_SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+_SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+_sb = None
+if _SUPABASE_URL and _SUPABASE_KEY:
+    try:
+        from supabase import create_client
+        _sb = create_client(_SUPABASE_URL, _SUPABASE_KEY)
+    except Exception as _e:
+        logger.warning("Supabase init failed: %s", _e)
+
+# Simple in-memory tenant cache (5-minute TTL) to avoid a DB hit on every request
+_tenant_cache: dict[str, tuple[dict, float]] = {}
+_TENANT_TTL = 300
+
+def _get_tenant(slug: str) -> dict:
+    """Fetch tenant config from Supabase with short-lived cache. Falls back to defaults."""
+    now = time.monotonic()
+    if slug in _tenant_cache:
+        data, ts = _tenant_cache[slug]
+        if now - ts < _TENANT_TTL:
+            return data
+    if _sb and slug:
+        try:
+            res = _sb.table("tenants").select("*").eq("slug", slug).eq("subscription_status", "active").single().execute()
+            if res.data:
+                _tenant_cache[slug] = (res.data, now)
+                return res.data
+        except Exception as e:
+            logger.warning("Tenant lookup failed for %r: %s", slug, e)
+    # Default fallback — keeps Ken's existing behaviour if Supabase is unreachable
+    return {
+        "slug": slug or "kenhoehn",
+        "gallery_name": "Ken Hoehn Gallery",
+        "phone": "403-675-6677",
+        "email": "info@kenhoehn.ca",
+        "bcc_email": "info@kenhoehn.ca",
+        "email_intro": (
+            "This is a visual of the beautiful Ken Hoehn picture you chose for your home or office. "
+            "We\u2019re really excited to have the piece on your wall, right where you have it placed in "
+            "the mock up, in that exact size!"
+        ),
+        "email_body": (
+            "We encourage you to call us at 403-675-6677 so we can answer additional questions you "
+            "might have and make recommendations for the finish you\u2019d like, clarify shipping options, "
+            "offer production time estimates and present a great way for you to save money with our "
+            "incredible collector program. You can also email us at info@kenhoehn.ca if you like."
+        ),
+        "email_signature": "Thanks so much,\nKen",
+        "subscription_status": "active",
+    }
+
 
 def _save_image(data: bytes, mime: str) -> str:
     """Persist image bytes server-side; return a fresh UUID key."""
@@ -260,8 +312,8 @@ async def make_thumbnail(file: UploadFile = File(...)) -> Response:
 # ── Step 1 — Upload Form ──────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def home() -> HTMLResponse:
-    return HTMLResponse(content="""<!DOCTYPE html>
+async def home(gallery: str = Query("kenhoehn")) -> HTMLResponse:
+    _html = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -442,6 +494,7 @@ async def home() -> HTMLResponse:
   <p class="card-sub">Step 1 of 4 — Upload &amp; configure</p>
 
   <form action="/mockup/picker" enctype="multipart/form-data" method="post" id="mainForm">
+    <input type="hidden" name="gallery" value="__GALLERY__">
 
     <label class="field-label" for="roomFile">Room / Wall Photo</label>
     <input type="file" name="room_file" id="roomFile" accept="image/*"
@@ -634,7 +687,8 @@ document.getElementById('artFile').addEventListener('change', checkStep1Complete
 document.getElementById('wallMeasInput').addEventListener('input', checkStep1Complete);
 </script>
 </body>
-</html>""")
+</html>"""
+    return HTMLResponse(content=_html.replace("__GALLERY__", html_mod.escape(gallery)))
 
 
 def _back_btn(ref: str) -> str:
@@ -747,7 +801,7 @@ def _fetch_variants(ref: str) -> str:
 
 # ── Step 1b — Prefill flow (artwork supplied via URL) ─────────────────────────
 
-def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants_json: str = "[]", frame: str = "", coa_field: str = "", image_key: str = "") -> str:
+def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants_json: str = "[]", frame: str = "", coa_field: str = "", image_key: str = "", gallery: str = "kenhoehn") -> str:
     """Return Step-1 HTML with artwork pre-loaded; client only supplies room + measurement."""
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -874,6 +928,7 @@ def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants
     <input type="hidden" name="frame" value="{html_mod.escape(frame)}">
     <input type="hidden" name="coa_field" value="{html_mod.escape(coa_field)}">
     <input type="hidden" name="image_key" value="{html_mod.escape(image_key)}">
+    <input type="hidden" name="gallery" value="{html_mod.escape(gallery)}">
 
     <label class="field-label" for="roomFile">Room / Wall Photo</label>
     <input type="file" name="room_file" id="roomFile" accept="image/*"
@@ -1295,6 +1350,7 @@ async def mockup_picker_restart(
     frame:            str                    = Form(""),
     coa_field:        str                    = Form(""),
     image_key:        str                    = Form(""),
+    gallery:          str                    = Form("kenhoehn"),
 ) -> HTMLResponse:
     """Accept stored image IDs from the restart page; optionally replace the room photo."""
     orientation = orientation.strip().upper()
@@ -1309,11 +1365,11 @@ async def mockup_picker_restart(
     else:
         _load_image(room_id)
     variants_json = _fetch_variants(ref)
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key))
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key, gallery))
 
 
 @app.get("/mockup/prefill", response_class=HTMLResponse)
-async def mockup_prefill(art_url: str = Query(...), ref: str = Query(""), frame: str = Query(""), coa_field: str = Query(""), image_key: str = Query("")) -> HTMLResponse:
+async def mockup_prefill(art_url: str = Query(...), ref: str = Query(""), frame: str = Query(""), coa_field: str = Query(""), image_key: str = Query(""), gallery: str = Query("kenhoehn")) -> HTMLResponse:
     """Fetch artwork from a URL, store it, return a pre-populated Step-1 page."""
     parsed = urllib.parse.urlparse(art_url)
     if parsed.scheme not in ("http", "https"):
@@ -1357,7 +1413,7 @@ async def mockup_prefill(art_url: str = Query(...), ref: str = Query(""), frame:
     art_thumb_b64 = base64.b64encode(thumb_buf.getvalue()).decode("utf-8")
 
     variants_json = _fetch_variants(ref)
-    return HTMLResponse(content=_build_prefill_html(art_id, art_thumb_b64, ref, variants_json, frame, coa_field, image_key))
+    return HTMLResponse(content=_build_prefill_html(art_id, art_thumb_b64, ref, variants_json, frame, coa_field, image_key, gallery))
 
 
 # ── Shared picker-page builder ────────────────────────────────────────────────
@@ -1372,6 +1428,7 @@ def _build_picker_html(
     frame: str = "",
     coa_field: str = "",
     image_key: str = "",
+    gallery: str = "kenhoehn",
 ) -> str:
     """Return the full Step-2 picker HTML string."""
     room_data, _ = _load_image(room_id)
@@ -1622,6 +1679,7 @@ def _build_picker_html(
   <input type="hidden" name="frame"            value="{html_mod.escape(frame)}">
   <input type="hidden" name="coa_field"        value="{html_mod.escape(coa_field)}">
   <input type="hidden" name="image_key"        value="{html_mod.escape(image_key)}">
+  <input type="hidden" name="gallery"          value="{html_mod.escape(gallery)}">
   <input type="hidden" name="pt1_x"            id="fPt1x">
   <input type="hidden" name="pt1_y"            id="fPt1y">
   <input type="hidden" name="pt2_x"            id="fPt2x">
@@ -1949,6 +2007,7 @@ async def mockup_picker_post(
     art_file:         UploadFile = File(...),
     wall_measurement: float      = Form(...),
     orientation:      str        = Form("H"),
+    gallery:          str        = Form("kenhoehn"),
 ) -> HTMLResponse:
     """Validate uploads, store them, return the measurement-picker page."""
     if not (1 <= wall_measurement <= 9999):
@@ -1967,7 +2026,7 @@ async def mockup_picker_post(
     room_id = _save_image(room_bytes, "image/jpeg")
     art_id  = _save_image(art_bytes,  "image/jpeg")
 
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation))
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, gallery=gallery))
 
 
 @app.get("/mockup/picker", response_class=HTMLResponse)
@@ -1980,6 +2039,7 @@ async def mockup_picker_get(
     frame:            str   = Query(""),
     coa_field:        str   = Query(""),
     image_key:        str   = Query(""),
+    gallery:          str   = Query("kenhoehn"),
 ) -> HTMLResponse:
     """Re-render the picker from stored images (used by 'Re-mark Wall' back-link)."""
     orientation = orientation.strip().upper()
@@ -1988,7 +2048,7 @@ async def mockup_picker_get(
     if not (1 <= wall_measurement <= 9999):
         raise HTTPException(400, "Invalid measurement.")
     variants_json = _fetch_variants(ref)
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key))
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key, gallery))
 
 
 @app.post("/mockup/picker_prefill", response_class=HTMLResponse)
@@ -2002,6 +2062,7 @@ async def mockup_picker_prefill(
     frame:            str        = Form(""),
     coa_field:        str        = Form(""),
     image_key:        str        = Form(""),
+    gallery:          str        = Form("kenhoehn"),
 ) -> HTMLResponse:
     """Prefill variant: artwork already stored; only room file is uploaded here."""
     if not (1 <= wall_measurement <= 9999):
@@ -2018,7 +2079,7 @@ async def mockup_picker_prefill(
     room_bytes = _to_jpeg(room_pil)
     room_id = _save_image(room_bytes, "image/jpeg")
 
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key))
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key, gallery))
 
 
 # ── Step 3 — Interactive Editor ───────────────────────────────────────────────
@@ -2038,6 +2099,7 @@ async def mockup_editor(
     frame:            str   = Form(""),
     coa_field:        str   = Form(""),
     image_key:        str   = Form(""),
+    gallery:          str   = Form("kenhoehn"),
 ) -> HTMLResponse:
     orientation = orientation.strip().upper()
     if orientation not in ("H", "V"):
@@ -2493,6 +2555,7 @@ async def mockup_editor(
 const VARIANTS         = {variants_js};
 const HAS_PRODUCT_SIZES = {'true' if has_product_sizes else 'false'};
 const COA_FIELD        = "{html_mod.escape(coa_field)}";
+const GALLERY_SLUG     = "{html_mod.escape(gallery)}";
 const ROOM_B64         = "{room_b64}";
 const ROOM_MIME        = "{room_mime}";
 const FIRST_ART_B64    = "{art_b64}";
@@ -3151,6 +3214,7 @@ function sendEmail() {{
   const fd = new FormData();
   fd.append('recipient', email);
   fd.append('image_b64', imageB64);
+  fd.append('gallery', GALLERY_SLUG);
   const ap = active();
   if (ap && ap.lastSizeIn) {{
     const isPort = ap.aspect < 1;
@@ -3335,9 +3399,10 @@ if (HAS_PRODUCT_SIZES) {{
 
 @app.post("/mockup/email")
 async def email_mockup(
-    recipient: str = Form(...),
-    image_b64: str = Form(...),
+    recipient:  str = Form(...),
+    image_b64:  str = Form(...),
     print_size: str = Form(default=""),
+    gallery:    str = Form(default="kenhoehn"),
 ) -> Response:
     if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', recipient):
         raise HTTPException(400, "Invalid email address.")
@@ -3347,34 +3412,34 @@ async def email_mockup(
         raise HTTPException(400, "Invalid image data.")
     if not _RESEND_KEY:
         raise HTTPException(500, "Email sending is not configured on this server.")
+    tenant = _get_tenant(gallery)
     size_line = f"Print size selected: {print_size} inches\n\n" if print_size else ""
+    bcc = tenant.get("bcc_email") or tenant.get("email") or _FROM_EMAIL
+    intro     = tenant.get("email_intro", "")
+    body      = tenant.get("email_body", "")
+    signature = tenant.get("email_signature", "")
     try:
         import resend
         resend.api_key = _RESEND_KEY
         resend.Emails.send({
             "from": f"WallyMock <{_FROM_EMAIL}>",
             "to": [recipient],
-            "bcc": [_FROM_EMAIL],
+            "bcc": [bcc],
             "subject": "Your WallyMock Mockup",
             "text": (
-                "Hello there,\n\n"
-                "This is a visual of the beautiful Ken Hoehn picture you chose for your home or office. "
-                "We're really excited to have the piece on your wall, right where you have it placed in "
-                "the mock up, in that exact size!\n\n"
+                f"Hello there,\n\n"
+                f"{intro}\n\n"
                 f"{size_line}"
-                "An amazing piece of art can transform your experience at home!\n\n"
-                "We encourage you to call us at 403-675-6677 so we can answer additional questions you "
-                "might have and make recommendations for the finish you'd like, clarify shipping options, "
-                "offer production time estimates and present a great way for you to save money with our "
-                "incredible collector program. You can also email us at info@kenhoehn.ca if you like.\n\n"
-                "Thanks so much,\nKen"
+                f"An amazing piece of art can transform your experience at home!\n\n"
+                f"{body}\n\n"
+                f"{signature}"
             ),
             "attachments": [{"filename": "wall-mockup.jpg", "content": list(img_bytes)}],
         })
     except Exception as exc:
         logger.error("Resend failed: %s: %s", type(exc).__name__, exc)
         raise HTTPException(500, f"Could not send email: {exc}")
-    logger.info("Mockup emailed to %s", recipient)
+    logger.info("Mockup emailed to %s (gallery=%s)", recipient, gallery)
     return Response(content='{"ok":true}', media_type="application/json")
 
 
