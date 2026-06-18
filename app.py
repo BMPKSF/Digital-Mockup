@@ -3157,9 +3157,7 @@ function sendEmail() {{
     const longIn  = ap.lastSizeIn;
     const shortIn = isPort ? Math.round((longIn * ap.aspect) * 10) / 10
                            : Math.round((longIn / ap.aspect) * 10) / 10;
-    const wIn = isPort ? shortIn : longIn;
-    const hIn = isPort ? longIn  : shortIn;
-    fd.append('print_size', wIn + ' x ' + hIn);
+    fd.append('print_size', longIn + ' x ' + shortIn);
   }}
   fetch('/mockup/email', {{ method: 'POST', body: fd }})
     .then(r => r.ok ? r.json() : r.json().then(j => Promise.reject(j.detail || 'Error')))
