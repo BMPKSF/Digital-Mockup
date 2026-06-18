@@ -3151,6 +3151,16 @@ function sendEmail() {{
   const fd = new FormData();
   fd.append('recipient', email);
   fd.append('image_b64', imageB64);
+  const ap = active();
+  if (ap && ap.lastSizeIn) {{
+    const isPort = ap.aspect < 1;
+    const longIn  = ap.lastSizeIn;
+    const shortIn = isPort ? Math.round((longIn * ap.aspect) * 10) / 10
+                           : Math.round((longIn / ap.aspect) * 10) / 10;
+    const wIn = isPort ? shortIn : longIn;
+    const hIn = isPort ? longIn  : shortIn;
+    fd.append('print_size', wIn + ' x ' + hIn);
+  }}
   fetch('/mockup/email', {{ method: 'POST', body: fd }})
     .then(r => r.ok ? r.json() : r.json().then(j => Promise.reject(j.detail || 'Error')))
     .then(() => {{
@@ -3329,6 +3339,7 @@ if (HAS_PRODUCT_SIZES) {{
 async def email_mockup(
     recipient: str = Form(...),
     image_b64: str = Form(...),
+    print_size: str = Form(default=""),
 ) -> Response:
     if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', recipient):
         raise HTTPException(400, "Invalid email address.")
@@ -3338,6 +3349,7 @@ async def email_mockup(
         raise HTTPException(400, "Invalid image data.")
     if not _RESEND_KEY:
         raise HTTPException(500, "Email sending is not configured on this server.")
+    size_line = f"Print size selected: {print_size} inches\n\n" if print_size else ""
     try:
         import resend
         resend.api_key = _RESEND_KEY
@@ -3351,6 +3363,7 @@ async def email_mockup(
                 "This is a visual of the beautiful Ken Hoehn picture you chose for your home or office. "
                 "We're really excited to have the piece on your wall, right where you have it placed in "
                 "the mock up, in that exact size!\n\n"
+                f"{size_line}"
                 "An amazing piece of art can transform your experience at home!\n\n"
                 "We encourage you to call us at 403-675-6677 so we can answer additional questions you "
                 "might have and make recommendations for the finish you'd like, clarify shipping options, "
