@@ -3443,6 +3443,34 @@ async def email_mockup(
     return Response(content='{"ok":true}', media_type="application/json")
 
 
+# ── Tenant diagnostic endpoint ────────────────────────────────────────────────
+
+@app.get("/mockup/tenant-check")
+async def tenant_check(gallery: str = Query("kenhoehn")) -> Response:
+    """Return resolved tenant config and Supabase connection status (for debugging)."""
+    status = {
+        "supabase_configured": bool(_SUPABASE_URL and _SUPABASE_KEY),
+        "supabase_client_init": _sb is not None,
+        "gallery": gallery,
+    }
+    if _sb:
+        try:
+            res = _sb.table("tenants").select("*").eq("slug", gallery).single().execute()
+            status["supabase_query"] = "ok"
+            status["row_found"] = res.data is not None
+            status["subscription_status"] = (res.data or {}).get("subscription_status")
+            status["email_signature"] = (res.data or {}).get("email_signature")
+        except Exception as e:
+            status["supabase_query"] = "error"
+            status["error"] = str(e)
+    else:
+        status["supabase_query"] = "skipped — client not initialised"
+    tenant = _get_tenant(gallery)
+    status["resolved_signature"] = tenant.get("email_signature")
+    status["source"] = "supabase" if _sb and status.get("row_found") else "fallback"
+    return Response(content=json.dumps(status, indent=2), media_type="application/json")
+
+
 # ── Image serving endpoint ────────────────────────────────────────────────────
 
 @app.get("/mockup/img/{uid}")
