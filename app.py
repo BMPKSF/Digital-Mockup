@@ -2271,6 +2271,7 @@ async def mockup_editor(
         f"&art_id={urllib.parse.quote(art_id)}"
         f"&wall_measurement={wall_measurement}"
         f"&orientation={orientation}"
+        f"&gallery={urllib.parse.quote(gallery)}"
         + (f"&ref={urllib.parse.quote(ref)}" if ref else "")
         + (f"&frame={urllib.parse.quote(frame)}" if frame else "")
         + (f"&coa_field={urllib.parse.quote(coa_field)}" if coa_field else "")
