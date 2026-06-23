@@ -43,15 +43,17 @@ except ImportError:
 # ── App & constants ───────────────────────────────────────────────────────────
 app = FastAPI(title="Wall Mockup Tool")
 
-# Allow kenhoehn.ca to embed WallyMock in an iframe
-_ALLOWED_ORIGINS = {"https://kenhoehn.ca", "https://www.kenhoehn.ca"}
-
 class FrameAllowMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        response.headers["Content-Security-Policy"] = (
-            "frame-ancestors 'self' https://kenhoehn.ca https://www.kenhoehn.ca"
-        )
+        slug = request.query_params.get("gallery", "")
+        if slug:
+            tenant = _get_tenant(slug)
+            origins = tenant.get("allowed_origins") or []
+        else:
+            origins = []
+        csp = ("frame-ancestors 'self' " + " ".join(origins)) if origins else "frame-ancestors 'none'"
+        response.headers["Content-Security-Policy"] = csp
         return response
 
 app.add_middleware(FrameAllowMiddleware)
@@ -493,7 +495,7 @@ async def home(gallery: str = Query("kenhoehn")) -> HTMLResponse:
   <h2>Create a Mockup</h2>
   <p class="card-sub">Step 1 of 4 — Upload &amp; configure</p>
 
-  <form action="/mockup/picker" enctype="multipart/form-data" method="post" id="mainForm">
+  <form action="/mockup/picker?gallery=__GALLERY__" enctype="multipart/form-data" method="post" id="mainForm">
     <input type="hidden" name="gallery" value="__GALLERY__">
 
     <label class="field-label" for="roomFile">Room / Wall Photo</label>
@@ -691,11 +693,11 @@ document.getElementById('wallMeasInput').addEventListener('input', checkStep1Com
     return HTMLResponse(content=_html.replace("__GALLERY__", html_mod.escape(gallery)))
 
 
-def _back_btn(ref: str) -> str:
+def _back_btn(ref: str, base_url: str = "") -> str:
     """Fixed top-left 'Back to Artwork' button, only rendered when ref is set."""
-    if not ref:
+    if not ref or not base_url:
         return ""
-    url = html_mod.escape("https://kenhoehn.ca" + ref)
+    url = html_mod.escape(base_url + ref)
     return (
         f'<a href="{url}" '
         'style="position:fixed;top:12px;left:12px;z-index:9999;background:#fff;'
@@ -718,12 +720,12 @@ def _img_key(url: str) -> str:
         return ""
 
 
-def _fetch_variants(ref: str) -> str:
+def _fetch_variants(ref: str, base_url: str = "") -> str:
     """Fetch Squarespace product JSON and return all variants as a JSON string."""
-    if not ref or not ref.startswith("/"):
+    if not ref or not ref.startswith("/") or not base_url:
         return "[]"
     try:
-        url = "https://kenhoehn.ca" + ref + "?format=json-pretty"
+        url = base_url + ref + "?format=json-pretty"
         req = urllib.request.Request(url, headers={"User-Agent": "WallyMock/1.0"})
         with urllib.request.urlopen(req, timeout=8) as resp:
             data = json.loads(resp.read(2 * 1024 * 1024))
@@ -801,7 +803,7 @@ def _fetch_variants(ref: str) -> str:
 
 # ── Step 1b — Prefill flow (artwork supplied via URL) ─────────────────────────
 
-def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants_json: str = "[]", frame: str = "", coa_field: str = "", image_key: str = "", gallery: str = "kenhoehn") -> str:
+def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants_json: str = "[]", frame: str = "", coa_field: str = "", image_key: str = "", gallery: str = "kenhoehn", base_url: str = "") -> str:
     """Return Step-1 HTML with artwork pre-loaded; client only supplies room + measurement."""
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -908,7 +910,7 @@ def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants
 </style>
 </head>
 <body>
-{_back_btn(ref)}
+{_back_btn(ref, base_url)}
 <div class="card">
   <div class="logo">WallyMock<sup style="font-size:0.45em;vertical-align:super;letter-spacing:0;">TM</sup></div>
   <p class="card-sub">Step 1 of 4 — Upload &amp; configure</p>
@@ -921,7 +923,7 @@ def _build_prefill_html(art_id: str, art_thumb_b64: str, ref: str = "", variants
     </div>
   </div>
 
-  <form action="/mockup/picker_prefill" enctype="multipart/form-data" method="post" id="mainForm">
+  <form action="/mockup/picker_prefill?gallery={html_mod.escape(gallery)}" enctype="multipart/form-data" method="post" id="mainForm">
     <input type="hidden" name="art_id" value="{art_id}">
     <input type="hidden" name="ref" value="{html_mod.escape(ref)}">
     <input type="hidden" name="variants_json" value="{html_mod.escape(variants_json)}">
@@ -1100,6 +1102,8 @@ def _build_restart_html(
     frame: str = "",
     coa_field: str = "",
     image_key: str = "",
+    base_url: str = "",
+    gallery: str = "kenhoehn",
 ) -> str:
     """Return Step-1 HTML with both images pre-loaded from the store."""
     orient_h_checked = "checked" if orientation == "H" else ""
@@ -1193,7 +1197,7 @@ def _build_restart_html(
 </style>
 </head>
 <body>
-{_back_btn(ref)}
+{_back_btn(ref, base_url)}
 <div class="card">
   <div class="logo">WallyMock<sup style="font-size:0.45em;vertical-align:super;letter-spacing:0;">TM</sup></div>
   <p class="card-sub">Step 1 of 4 — Review &amp; continue</p>
@@ -1218,7 +1222,7 @@ def _build_restart_html(
     </div>
   </div>
 
-  <form action="/mockup/picker_restart" enctype="multipart/form-data" method="post" id="restartForm">
+  <form action="/mockup/picker_restart?gallery={html_mod.escape(gallery)}" enctype="multipart/form-data" method="post" id="restartForm">
     <input type="hidden" name="room_id"    id="roomIdField" value="{room_id}">
     <input type="hidden" name="art_id"    value="{art_id}">
     <input type="hidden" name="ref"       value="{html_mod.escape(ref)}">
@@ -1309,6 +1313,7 @@ async def mockup_restart(
     frame:            str   = Query(""),
     coa_field:        str   = Query(""),
     image_key:        str   = Query(""),
+    gallery:          str   = Query("kenhoehn"),
 ) -> HTMLResponse:
     """Re-render step 1 with both images pre-loaded (used by all back-to-start links)."""
     orientation = orientation.strip().upper()
@@ -1334,8 +1339,9 @@ async def mockup_restart(
     art_pil.save(art_buf, format="JPEG", quality=82)
     art_thumb_b64 = base64.b64encode(art_buf.getvalue()).decode("utf-8")
 
+    base_url = (_get_tenant(gallery).get("allowed_origins") or [""])[0]
     return HTMLResponse(content=_build_restart_html(
-        room_id, art_id, wall_measurement, orientation, room_thumb_b64, art_thumb_b64, ref, frame, coa_field, image_key
+        room_id, art_id, wall_measurement, orientation, room_thumb_b64, art_thumb_b64, ref, frame, coa_field, image_key, base_url, gallery
     ))
 
 
@@ -1364,8 +1370,9 @@ async def mockup_picker_restart(
         room_id = _save_image(_to_jpeg(room_pil), "image/jpeg")
     else:
         _load_image(room_id)
-    variants_json = _fetch_variants(ref)
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key, gallery))
+    base_url = (_get_tenant(gallery).get("allowed_origins") or [""])[0]
+    variants_json = _fetch_variants(ref, base_url)
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key, gallery, base_url))
 
 
 @app.get("/mockup/prefill", response_class=HTMLResponse)
@@ -1412,8 +1419,9 @@ async def mockup_prefill(art_url: str = Query(...), ref: str = Query(""), frame:
         thumb.save(thumb_buf, format="JPEG", quality=82)
     art_thumb_b64 = base64.b64encode(thumb_buf.getvalue()).decode("utf-8")
 
-    variants_json = _fetch_variants(ref)
-    return HTMLResponse(content=_build_prefill_html(art_id, art_thumb_b64, ref, variants_json, frame, coa_field, image_key, gallery))
+    base_url = (_get_tenant(gallery).get("allowed_origins") or [""])[0]
+    variants_json = _fetch_variants(ref, base_url)
+    return HTMLResponse(content=_build_prefill_html(art_id, art_thumb_b64, ref, variants_json, frame, coa_field, image_key, gallery, base_url))
 
 
 # ── Shared picker-page builder ────────────────────────────────────────────────
@@ -1429,6 +1437,7 @@ def _build_picker_html(
     coa_field: str = "",
     image_key: str = "",
     gallery: str = "kenhoehn",
+    base_url: str = "",
 ) -> str:
     """Return the full Step-2 picker HTML string."""
     room_data, _ = _load_image(room_id)
@@ -1448,6 +1457,7 @@ def _build_picker_html(
         f"&art_id={urllib.parse.quote(art_id)}"
         f"&wall_measurement={wall_measurement}"
         f"&orientation={orientation}"
+        f"&gallery={urllib.parse.quote(gallery)}"
         + (f"&ref={urllib.parse.quote(ref)}" if ref else "")
         + (f"&frame={urllib.parse.quote(frame)}" if frame else "")
         + (f"&coa_field={urllib.parse.quote(coa_field)}" if coa_field else "")
@@ -1611,7 +1621,7 @@ def _build_picker_html(
 </style>
 </head>
 <body>
-{_back_btn(ref)}
+{_back_btn(ref, base_url)}
 <h1 class="page-title">Step 2 — Mark Your Measurement</h1>
 <p class="page-sub">Click two points on the photo that span your {wall_measurement}" measurement</p>
 
@@ -1669,7 +1679,7 @@ def _build_picker_html(
   <a href="{restart_url}">← Back to Step 1</a>
 </div>
 
-<form id="rf" action="/mockup/editor" method="post" style="display:none">
+<form id="rf" action="/mockup/editor?gallery={html_mod.escape(gallery)}" method="post" style="display:none">
   <input type="hidden" name="room_id"          value="{room_id}">
   <input type="hidden" name="art_id"           value="{art_id}">
   <input type="hidden" name="wall_measurement" value="{wall_measurement}">
@@ -2026,7 +2036,8 @@ async def mockup_picker_post(
     room_id = _save_image(room_bytes, "image/jpeg")
     art_id  = _save_image(art_bytes,  "image/jpeg")
 
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, gallery=gallery))
+    base_url = (_get_tenant(gallery).get("allowed_origins") or [""])[0]
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, gallery=gallery, base_url=base_url))
 
 
 @app.get("/mockup/picker", response_class=HTMLResponse)
@@ -2047,8 +2058,9 @@ async def mockup_picker_get(
         orientation = "H"
     if not (1 <= wall_measurement <= 9999):
         raise HTTPException(400, "Invalid measurement.")
-    variants_json = _fetch_variants(ref)
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key, gallery))
+    base_url = (_get_tenant(gallery).get("allowed_origins") or [""])[0]
+    variants_json = _fetch_variants(ref, base_url)
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key, gallery, base_url))
 
 
 @app.post("/mockup/picker_prefill", response_class=HTMLResponse)
@@ -2079,7 +2091,8 @@ async def mockup_picker_prefill(
     room_bytes = _to_jpeg(room_pil)
     room_id = _save_image(room_bytes, "image/jpeg")
 
-    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key, gallery))
+    base_url = (_get_tenant(gallery).get("allowed_origins") or [""])[0]
+    return HTMLResponse(content=_build_picker_html(room_id, art_id, wall_measurement, orientation, ref, variants_json, frame, coa_field, image_key, gallery, base_url))
 
 
 # ── Step 3 — Interactive Editor ───────────────────────────────────────────────
@@ -2107,6 +2120,10 @@ async def mockup_editor(
 
     if not (1 <= wall_measurement <= 9999):
         raise HTTPException(400, "Invalid measurement value.")
+
+    tenant = _get_tenant(gallery)
+    origins = tenant.get("allowed_origins") or []
+    parent_origin = origins[0] if origins else ""
 
     # Load both images from server-side store (never trusts form for image data)
     room_data, _ = _load_image(room_id)
@@ -2216,7 +2233,7 @@ async def mockup_editor(
             + '  <button class="btn btn-cart" id="addToCartBtn" style="display:none;margin-top:6px;" onclick="addToCart()">'
             'Add to Cart</button>\n'
             + coa_panel_html
-            + '  <a class="btn btn-ghost" id="contactSizeBtn" href="https://kenhoehn.ca/contact" '
+            + f'  <a class="btn btn-ghost" id="contactSizeBtn" href="{html_mod.escape(parent_origin)}/contact" '
             'target="_blank" rel="noopener" style="display:none;margin-top:6px;text-align:center;'
             'text-decoration:none;">Contact Us for a Custom Size \u2192</a>'
         )
@@ -2265,6 +2282,7 @@ async def mockup_editor(
         f"&art_id={urllib.parse.quote(art_id)}"
         f"&wall_measurement={wall_measurement}"
         f"&orientation={orientation}"
+        f"&gallery={urllib.parse.quote(gallery)}"
         + (f"&ref={urllib.parse.quote(ref)}" if ref else "")
         + (f"&frame={urllib.parse.quote(frame)}" if frame else "")
         + (f"&coa_field={urllib.parse.quote(coa_field)}" if coa_field else "")
@@ -2468,7 +2486,7 @@ async def mockup_editor(
 </style>
 </head>
 <body>
-{_back_btn(ref)}
+{_back_btn(ref, parent_origin)}
 <!-- ═══ Stage ═══ -->
 <div class="stage" id="stage">
   <canvas id="mainCanvas"></canvas>
@@ -2556,6 +2574,7 @@ const VARIANTS         = {variants_js};
 const HAS_PRODUCT_SIZES = {'true' if has_product_sizes else 'false'};
 const COA_FIELD        = "{html_mod.escape(coa_field)}";
 const GALLERY_SLUG     = "{html_mod.escape(gallery)}";
+const PARENT_ORIGIN    = "{html_mod.escape(parent_origin)}";
 const ROOM_B64         = "{room_b64}";
 const ROOM_MIME        = "{room_mime}";
 const FIRST_ART_B64    = "{art_b64}";
@@ -3345,11 +3364,11 @@ function _fireAddToCart(coaName) {{
     itemId:   v.itemId,
     coaField: COA_FIELD,
     coaName:  coaName
-  }}, 'https://kenhoehn.ca');
+  }}, PARENT_ORIGIN);
 }}
 
 window.addEventListener('message', function(e) {{
-  if (e.origin !== 'https://kenhoehn.ca') return;
+  if (!PARENT_ORIGIN || e.origin !== PARENT_ORIGIN) return;
   if (!e.data) return;
   const coaPanel   = document.getElementById('coaPanel');
   const coaVisible = coaPanel && coaPanel.style.display !== 'none';
@@ -3360,7 +3379,7 @@ window.addEventListener('message', function(e) {{
   if (e.data.action === 'wallymock_cartSuccess') {{
     activeBtn.textContent = 'Added! \u2714 View Cart \u2192';
     activeBtn.disabled = false;
-    activeBtn.onclick = function() {{ window.parent.location.href = 'https://kenhoehn.ca/cart'; }};
+    activeBtn.onclick = function() {{ window.parent.location.href = PARENT_ORIGIN + '/cart'; }};
   }} else if (e.data.action === 'wallymock_cartError') {{
     activeBtn.textContent = 'Could not add to cart \u2014 try again';
     activeBtn.disabled = false;
