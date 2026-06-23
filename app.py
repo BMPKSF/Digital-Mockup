@@ -1104,6 +1104,7 @@ def _build_restart_html(
     image_key: str = "",
     base_url: str = "",
     gallery: str = "kenhoehn",
+    art_thumb_mime: str = "image/jpeg",
 ) -> str:
     """Return Step-1 HTML with both images pre-loaded from the store."""
     orient_h_checked = "checked" if orientation == "H" else ""
@@ -1215,7 +1216,7 @@ def _build_restart_html(
   </div>
 
   <div class="img-preview-box">
-    <img src="data:image/jpeg;base64,{art_thumb_b64}" alt="Artwork">
+    <img src="data:{art_thumb_mime};base64,{art_thumb_b64}" alt="Artwork">
     <div class="img-preview-text">
       <strong><span class="img-check">✓</span> Artwork loaded</strong>
       Your selected print is ready.
@@ -1336,12 +1337,17 @@ async def mockup_restart(
     art_pil = Image.open(BytesIO(art_data))
     art_pil.thumbnail((400, 220), Image.LANCZOS)
     art_buf = BytesIO()
-    art_pil.save(art_buf, format="JPEG", quality=82)
+    if art_pil.mode in ("RGBA", "LA", "PA"):
+        art_pil.save(art_buf, format="PNG")
+        art_thumb_mime = "image/png"
+    else:
+        art_pil.save(art_buf, format="JPEG", quality=82)
+        art_thumb_mime = "image/jpeg"
     art_thumb_b64 = base64.b64encode(art_buf.getvalue()).decode("utf-8")
 
     base_url = (_get_tenant(gallery).get("allowed_origins") or [""])[0]
     return HTMLResponse(content=_build_restart_html(
-        room_id, art_id, wall_measurement, orientation, room_thumb_b64, art_thumb_b64, ref, frame, coa_field, image_key, base_url, gallery
+        room_id, art_id, wall_measurement, orientation, room_thumb_b64, art_thumb_b64, ref, frame, coa_field, image_key, base_url, gallery, art_thumb_mime
     ))
 
 
