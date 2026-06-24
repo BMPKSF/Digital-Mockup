@@ -3491,10 +3491,10 @@ async def stripe_webhook(request: Request) -> Response:
 
     event_type = event["type"]
     subscription = event["data"]["object"]
-    customer_id = subscription.get("customer")
+    customer_id = getattr(subscription, "customer", None)
 
     if event_type in ("customer.subscription.created", "customer.subscription.updated"):
-        stripe_status = subscription.get("status")
+        stripe_status = getattr(subscription, "status", None)
         # Stripe statuses that mean the tenant should be active
         new_status = "active" if stripe_status in ("active", "trialing") else "inactive"
     elif event_type == "customer.subscription.deleted":
@@ -3506,7 +3506,7 @@ async def stripe_webhook(request: Request) -> Response:
         try:
             _sb.table("tenants").update({
                 "subscription_status": new_status,
-                "stripe_subscription_id": subscription.get("id"),
+                "stripe_subscription_id": getattr(subscription, "id", None),
             }).eq("stripe_customer_id", customer_id).execute()
             # Bust cache for any tenant matching this customer
             for slug, (data, _) in list(_tenant_cache.items()):
