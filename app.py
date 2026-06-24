@@ -3469,6 +3469,57 @@ async def email_mockup(
     return Response(content='{"ok":true}', media_type="application/json")
 
 
+# ── Stripe webhook ────────────────────────────────────────────────────────────
+
+_STRIPE_SECRET_KEY     = os.environ.get("STRIPE_SECRET_KEY", "")
+_STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+
+@app.post("/webhooks/stripe")
+async def stripe_webhook(request: Request) -> Response:
+    if not _STRIPE_SECRET_KEY or not _STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(500, "Stripe not configured")
+
+    import stripe as _stripe
+    _stripe.api_key = _STRIPE_SECRET_KEY
+
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    try:
+        event = _stripe.Webhook.construct_event(payload, sig, _STRIPE_WEBHOOK_SECRET)
+    except _stripe.error.SignatureVerificationError:
+        raise HTTPException(400, "Invalid Stripe signature")
+
+    event_type = event["type"]
+    subscription = event["data"]["object"]
+    customer_id = subscription.get("customer")
+
+    if event_type in ("customer.subscription.created", "customer.subscription.updated"):
+        stripe_status = subscription.get("status")
+        # Stripe statuses that mean the tenant should be active
+        new_status = "active" if stripe_status in ("active", "trialing") else "inactive"
+    elif event_type == "customer.subscription.deleted":
+        new_status = "inactive"
+    else:
+        return Response(content='{"ok":true}', media_type="application/json")
+
+    if _sb and customer_id:
+        try:
+            _sb.table("tenants").update({
+                "subscription_status": new_status,
+                "stripe_subscription_id": subscription.get("id"),
+            }).eq("stripe_customer_id", customer_id).execute()
+            # Bust cache for any tenant matching this customer
+            for slug, (data, _) in list(_tenant_cache.items()):
+                if data.get("stripe_customer_id") == customer_id:
+                    _tenant_cache.pop(slug, None)
+        except Exception as e:
+            logger.error("Stripe webhook DB update failed: %s", e)
+            raise HTTPException(500, "DB update failed")
+
+    logger.info("Stripe webhook %s → customer=%s status=%s", event_type, customer_id, new_status)
+    return Response(content='{"ok":true}', media_type="application/json")
+
+
 # ── Image serving endpoint ────────────────────────────────────────────────────
 
 @app.get("/mockup/img/{uid}")
